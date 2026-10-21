@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets (keep the example files)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Uploaded files (temporary, never commit)
+server/uploads/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test and coverage output
+coverage/
+.vitest/
+
+# Vite / cache
+.vite/
+.cache/
+.eslintcache
+
+# Evaluation raw outputs (may contain meeting text; keep only what you choose to share)
+eval/results/
+
+# Editor and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local scratch
+tmp/
+*.local
