@@ -15,3 +15,4 @@ You are building MeetBrief AI one phase at a time. Follow these rules in every p
     - Deviations from the plan, and why
     - Known risks or follow-ups
 10. Do not commit, push, merge, stash or switch branches. Leave your changes in the working tree; I will review, commit and push to main myself after my own check. Do not start the next phase.
+11. Never start, stop or reconfigure system services or background processes (such as MongoDB), and never create files or folders outside the task, without asking me first. If a dependency such as MongoDB is not reachable, report NOT VERIFIED for the checks that need it and tell me what to do; do not work around it.
