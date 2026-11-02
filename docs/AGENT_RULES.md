@@ -9,9 +9,9 @@ You are building MeetBrief AI one phase at a time. Follow these rules in every p
 7. For the Gemini SDK and the PDF library, read their current official documentation before writing code and tell me which pages you used. Do not rely on memory for model names, limits or method signatures.
 8. Verification: after implementing, run the checks yourself (typecheck, tests, and the commands in the phase prompt). Never report PASS for something you did not run. If you cannot run it, report NOT VERIFIED and tell me what to do.
 9. Finish with a Verification Report, then stop and wait:
-    - Phase and branch name
+    - Phase name
     - Table: Acceptance criterion | How you checked it | Result (PASS / FAIL / NOT VERIFIED) | Evidence (short output summary)
     - Files created or changed, one line each
     - Deviations from the plan, and why
     - Known risks or follow-ups
-10. Commit on the current phase branch with a clear message. Do not merge and do not start the next phase.
+10. Do not commit, push, merge, stash or switch branches. Leave your changes in the working tree; I will review, commit and push to main myself after my own check. Do not start the next phase.

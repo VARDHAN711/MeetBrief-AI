@@ -4,17 +4,18 @@ This file holds one prompt per phase. Work on ONE phase at a time.
 
 **For the agent:** when told "start Phase N", read ONLY that phase's section in this file (from its `## Phase N` heading to the next `## Phase` heading). Do not read, plan, or start any other phase. Always follow `docs/AGENT_RULES.md`. `docs/PLAN.md` is the source of truth for architecture, schema, API and prompts.
 
-**For the human:** start each phase in a fresh conversation, on a new branch `phase-N-name`, with this message (change N, the name, and the section letters if you like; the phase section already names what to read):
+**For the human:** start each phase in a fresh conversation on `main` (up to date with `git pull`, working tree clean), with this message (change N, the name, and the section letters if you like; the phase section already names what to read):
 
 ```
 We are starting Phase N (<name>) of MeetBrief AI.
+0. First run `git branch --show-current` and `git status`. The branch must be main and the working tree must be clean. If not, STOP and tell me; do not switch branches, commit or stash anything.
 1. Read docs/AGENT_RULES.md and follow it for this whole conversation.
 2. Read docs/PROMPTS.md, but ONLY the "Phase N" section. Do not read or start any other phase.
 3. Read the sections of docs/PLAN.md that the Phase N section names.
 4. Target Node 26. Implement exactly the Phase N section, run its verification, and end with the Verification Report in the format from AGENT_RULES.md. Then stop and wait for me.
 ```
 
-Lines marked **Human-only** are for you, not the agent. Do not skip them: an agent's report on its own work can overstate. All rows PASS and your check passes: merge, tick the phase in section O of the plan, start the next phase. Any FAIL or NOT VERIFIED: paste those rows back with "Fix only these, then re-verify".
+Lines marked **Human-only** are for you, not the agent. Do not skip them: an agent's report on its own work can overstate. All rows PASS and your check passes: commit and push to main yourself (the agent does not commit), run `git tag phase-N-verified`, tick the phase in section O of the plan, start the next phase. Any FAIL or NOT VERIFIED: paste those rows back with "Fix only these, then re-verify".
 
 ---
 
@@ -224,4 +225,4 @@ Acceptance: every section N item is PASS or explicitly handed to the team; the r
 
 ## If an agent goes off-plan
 
-Paste: "You changed X, which the plan says is Y. Revert it and follow the plan, or explain why the plan is wrong." Keep each phase on its own branch so a bad phase can be thrown away without losing earlier ones.
+Paste: "You changed X, which the plan says is Y. Revert it and follow the plan, or explain why the plan is wrong." Nothing is committed until a phase passes your check, so a bad phase can be thrown away without touching earlier work: run `git status`, then `git restore .` and `git clean -fd` (git-ignored files such as server/.env are left alone). Check `git status` first, because `git clean -fd` deletes untracked files for good.

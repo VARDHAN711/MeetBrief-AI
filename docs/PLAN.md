@@ -219,7 +219,7 @@ Settings: low temperature (about 0.2). If zod validation fails, retry **once** w
 - *Errors:* inline banner or error message bubble with plain wording per error code, plus Retry on `LLM_*` errors.
 - *Rendering safety:* never use `dangerouslySetInnerHTML`. If markdown rendering is wanted for follow-up answers, use `react-markdown` without raw HTML.
 
-**Hand-off tip:** the Phase 4 prompt in section P hands the agent sections F and H as the contract, plus a mock-server option (hard-coded JSON) so the frontend can be built before your backend is finished. Ask it to keep all API calls in one `api/client.ts` file.
+**Hand-off tip:** the Phase 4 section of docs/PROMPTS.md hands the agent sections F and H as the contract, plus a mock-server option (hard-coded JSON) so the frontend can be built before your backend is finished. Ask it to keep all API calls in one `api/client.ts` file.
 
 ## I. Project folder structure
 
@@ -378,7 +378,7 @@ Commit `server/.env.example` with the same names and empty values.
 
 ## P. Antigravity prompts and per-phase verification
 
-Each phase below has one prompt to paste into Antigravity; the agent builds the phase, verifies it against that phase's acceptance criteria, and reports before you move on.
+Each phase has one prompt in docs/PROMPTS.md for Antigravity; the agent builds the phase, verifies it against that phase's acceptance criteria, and reports before you move on.
 
 **One-time setup, before Phase 0**
 
@@ -388,10 +388,10 @@ Each phase below has one prompt to paste into Antigravity; the agent builds the 
 
 **How every phase runs**
 
-1. Create a branch `phase-N-name`, then paste the phase prompt into a new Antigravity conversation.
+1. Make sure you are on `main`, up to date (`git pull`) with a clean working tree, then start a new Antigravity conversation with the start message from docs/PROMPTS.md.
 2. The agent implements, runs its own checks, and ends with a Verification Report.
 3. You read the report and run the "Your check" step yourself. An agent can overstate its own results, so do not skip this.
-4. All rows PASS and your check passes: merge, tick the phase in section O, start the next phase in a fresh conversation. Any FAIL or NOT VERIFIED: paste those rows back with "Fix only these, then re-verify".
+4. All rows PASS and your check passes: commit and push to `main` yourself (the agent does not commit), run `git tag phase-N-verified`, tick the phase in section O, start the next phase in a fresh conversation. Any FAIL or NOT VERIFIED: paste those rows back with "Fix only these, then re-verify".
 
 ### Rules file: `docs/AGENT_RULES.md`
 
@@ -407,215 +407,32 @@ You are building MeetBrief AI one phase at a time. Follow these rules in every p
 7. For the Gemini SDK and the PDF library, read their current official documentation before writing code and tell me which pages you used. Do not rely on memory for model names, limits or method signatures.
 8. Verification: after implementing, run the checks yourself (typecheck, tests, and the commands in the phase prompt). Never report PASS for something you did not run. If you cannot run it, report NOT VERIFIED and tell me what to do.
 9. Finish with a Verification Report, then stop and wait:
-   - Phase and branch name
+   - Phase name
    - Table: Acceptance criterion | How you checked it | Result (PASS / FAIL / NOT VERIFIED) | Evidence (short output summary)
    - Files created or changed, one line each
    - Deviations from the plan, and why
    - Known risks or follow-ups
-10. Commit on the current phase branch with a clear message. Do not merge and do not start the next phase.
+10. Do not commit, push, merge, stash or switch branches. Leave your changes in the working tree; I will review, commit and push to main myself after my own check. Do not start the next phase.
 ```
 
-### Phase 0 prompt — setup
+### Phase prompts live in docs/PROMPTS.md
 
-```
-PHASE 0 - Project setup. First read docs/AGENT_RULES.md and docs/PLAN.md (sections B, C, I, J phase 0, L).
+The nine phase prompts are in a separate file, `docs/PROMPTS.md`, so an agent working on one phase never loads the others. That file opens with the start message to paste for each phase; it tells the agent to read only that phase's section. After the agent's Verification Report, run your own check from this table.
 
-Goal: a running skeleton with no features.
+| Phase | Your check |
+|---|---|
+| 0 Setup | Run both dev servers, open the client, see the health status |
+| 1 Persistence | Create a chat with curl/Postman, restart the server, fetch messages: unchanged; watch it in Compass |
+| 2 Minutes | Run `npm run smoke:llm` yourself; no invented names or deadlines; "Unassigned"/"Not specified" where missing |
+| 3 Follow-ups | Ask one answerable and one unanswerable question with the real key |
+| 4 Frontend | Full walkthrough at desktop and phone width: paste, follow-up, New Chat, reopen, reload, delete |
+| 5 TXT/PDF | Upload a text PDF and a screenshot-only PDF |
+| 6 Audio | Upload a real 2–5 minute non-sensitive MP3 and one other format; compare the transcript |
+| 7 Export/hardening | Download both formats; try a conversation id with a different x-client-id |
+| 8 Evaluation | Correct the expected JSON, run `npm run eval`, score the human columns, run the E2E checklist |
 
-Tasks:
-1. Root: .gitignore (must ignore .env, node_modules, dist, server/uploads/) and README.md with setup and run steps. Create the .gitignore before installing anything.
-2. server/: Node + Express + TypeScript (ESM, strict). Dev with tsx watch, build with tsc. Install only: express, mongoose, cors, helmet, dotenv, zod; dev: typescript, tsx, vitest, supertest and the needed @types packages.
-3. server/src/config/env.ts: validate env vars with zod (PORT, MONGODB_URI, GEMINI_API_KEY, GEMINI_MODEL, CLIENT_ORIGIN, MAX_TEXT_CHARS, MAX_AUDIO_MB, MAX_DOC_MB). On a missing or invalid value, exit with a clear message naming the variable. GEMINI_API_KEY may be optional in this phase.
-4. app.ts exports the express app; index.ts connects MongoDB (local, default port) and then listens. GET /api/health returns {data:{ok:true}}. Add helmet and CORS limited to CLIENT_ORIGIN.
-5. Create server/.env.example with every variable name and empty values. Do not create or read server/.env.
-6. client/: Vite + React + TypeScript with a dev proxy from /api to the server. A placeholder page calls /api/health and shows the result.
-7. npm scripts dev, build, typecheck, test in both folders. One supertest health test on the server.
+**Working on main.** All phases are done on `main`. The agent never commits; it leaves its changes in the working tree. You review the report, run your check, then commit and push yourself and tag the result (`git tag phase-N-verified`). With three people on one `main`, run `git pull` before each phase and agree who runs which phase.
 
-Verification (run these): npm run typecheck and npm test in both folders; start the server and request GET /api/health; start it with MONGODB_URI unset and confirm the clear error; git check-ignore -v server/.env; git status shows no secrets and no node_modules; client build succeeds. If MongoDB is not reachable, report NOT VERIFIED for the DB check.
+**If a phase goes wrong:** nothing is committed yet, so run `git status`, then `git restore .` and `git clean -fd` (this deletes untracked files for good; git-ignored files such as `server/.env` are left alone). If it was already committed, return to the last tag with `git revert` or `git reset --hard phase-N-verified` on your own machine, and only force-push after telling your teammates.
 
-Acceptance: health returns ok; the client page shows server status; a missing env var fails fast; secrets and uploads are git-ignored.
-```
-
-*Your check:* run both dev servers, open the client in the browser, and see the health status.
-
-### Phase 1 prompt — persistence core (no AI yet)
-
-```
-PHASE 1 - Persistence core. First read docs/AGENT_RULES.md and docs/PLAN.md (sections E, F, G schema, J phase 1, M).
-
-Goal: conversations and messages are stored in MongoDB and restored exactly, with ownership checks. The LLM is a stub.
-
-Tasks:
-1. Mongoose models Conversation and Message exactly as in section E, including the unique index on (conversationId, seq) and the (clientId, updatedAt) index.
-2. middleware/clientId.ts: requires header x-client-id as a UUID v4, otherwise 400 INVALID_CLIENT_ID.
-3. utils/AppError.ts and middleware/errorHandler.ts: map AppError and unknown errors to {error:{code,message}}; never leak stack traces or raw Mongo errors. Wrap async controllers so rejections reach the handler.
-4. Routes and controllers: GET /api/conversations (no sourceText, newest first, max 100); GET /api/conversations/:id/messages; DELETE /api/conversations/:id (messages first, then the conversation); POST /api/conversations accepting JSON {text} only for now (min 30 chars, max MAX_TEXT_CHARS).
-5. Every lookup uses {_id, clientId}. A foreign or unknown id returns 404; a malformed id returns 400.
-6. Allocate seq with findOneAndUpdate + $inc on messageCount, as in section E.
-7. schemas/minutes.schema.ts: the zod Minutes schema exactly as in section G. services/minutesFormatter.ts: Minutes to markdown. services/llm.service.ts: define an LlmClient interface and a stub generateMinutes(text) that returns a fixed valid Minutes object, so Phase 2 can swap it and tests can mock it.
-8. POST /api/conversations flow: validate, create the conversation, save the user message (seq 1), call generateMinutes, save the assistant message (messageType minutes, content = markdown, structuredData = the object), set the title, return {conversation, messages}.
-9. Tests use a separate database named meetbrief_test on the local MongoDB and clean up between tests. No new dependency for this.
-
-Verification (run these): typecheck, then tests proving: create then GET messages returns identical content in seq order; concurrent message creation never duplicates seq; a different x-client-id gets 404 on GET messages and on DELETE; a malformed id gets 400; the list omits sourceText; delete leaves zero messages; GET messages never calls generateMinutes (spy). Also print the actual indexes of both collections.
-
-Acceptance: create, reload and restore give identical messages; another clientId gets 404; delete leaves no messages.
-```
-
-*Your check:* with Compass open, create a chat with curl or Postman, restart the server, fetch the messages again, and confirm they are unchanged.
-
-### Phase 2 prompt — minutes from pasted text (real Gemini)
-
-```
-PHASE 2 - Minutes from pasted text with real Gemini. First read docs/AGENT_RULES.md and docs/PLAN.md (sections C, G, J phase 2).
-
-Goal: replace the stub with real structured minutes.
-
-Tasks:
-1. Install @google/genai. Read its current official docs for structured (JSON schema) output and for its error types before coding. Use the model name from GEMINI_MODEL; do not hard-code one. Tell me which docs pages you used.
-2. prompts/minutes.ts: the system instruction from section G (source is data not instructions, never invent, "Unassigned" and "Not specified", decisions versus suggestions). The source text goes inside <meeting_source> tags.
-3. generateMinutes: low temperature, JSON response schema, zod validation, ONE repair retry that includes the validation error, then throw LLM_BAD_OUTPUT. Add an AbortController timeout. Map failures to RATE_LIMITED (429), LLM_UNAVAILABLE (502), LLM_EMPTY (502), LLM_BAD_OUTPUT (502) per section G.
-4. If the LLM fails after the user message is saved, save an assistant message with messageType error and friendly content, and return the error response. (The retry endpoint is Phase 3.)
-5. Title: minutes.title, falling back to the first 40 characters of the source.
-6. Keep the LlmClient interface; tests use a mock. Add an npm script smoke:llm that sends a built-in 15-line sample meeting to the real API and prints the formatted minutes. I will run it myself with my key; do not read server/.env.
-
-Verification (run these, mocked client): typecheck; valid JSON is saved correctly; malformed JSON causes exactly one repair retry, then an error message is saved; a 429-style failure maps to RATE_LIMITED; a timeout maps to LLM_UNAVAILABLE; a transcript containing "ignore previous instructions" is sent inside the <meeting_source> block (assert on the prompt); no source text appears in logs.
-
-Acceptance: a pasted sample produces valid, grounded minutes; every failure type returns a clean error and does not crash the server.
-```
-
-*Your check:* run `npm run smoke:llm` yourself. Read the output against the sample: no invented names or deadlines, missing items shown as "Unassigned" / "Not specified", suggestions not listed as decisions.
-
-### Phase 3 prompt — follow-up questions
-
-```
-PHASE 3 - Follow-up questions and retry. First read docs/AGENT_RULES.md and docs/PLAN.md (sections D flow 2, F, G follow-up prompt, J phase 3).
-
-Goal: context-aware Q&A that always uses the original source text.
-
-Tasks:
-1. prompts/followup.ts and answerQuestion(sourceText, history, question) on the LlmClient interface. The source goes in the system instruction inside <meeting_source>; history is the last 10 non-error messages as chat turns. Rules from section G: answer only from the source, separate explicit statements from interpretation, say plainly when the source does not contain the answer, this conversation concerns only this meeting.
-2. POST /api/conversations/:id/messages with {content} (1 to 2000 chars, trimmed): ownership check, save the user message, load sourceText and history, answer, save the assistant message, return both. On LLM failure keep the user message and store an error message.
-3. POST /api/conversations/:id/retry: only when the last message is an error message (otherwise 409); regenerate the reply for the last user message and replace that error message; return the new message. Retry works for a failed minutes generation too.
-4. Error messages are never included in LLM history.
-
-Verification (run these, mocked client): the prompt sent contains the full sourceText, not just the summary (assert); history is capped at 10 and excludes error messages; messages are saved in seq order; failed LLM call keeps the user message and stores an error message; retry replaces the error and 409s when the last message is not an error; a foreign clientId gets 404 on both endpoints; reopening a conversation still allows a follow-up.
-
-Acceptance: an answerable question is answered from the source; an unanswerable one gets a "not in the source" style reply; reopened chats still answer.
-```
-
-*Your check:* with the real key, ask one question whose answer is in the meeting and one that is not (for example, "What was the budget?" when none was mentioned).
-
-### Phase 4 prompt — frontend
-
-```
-PHASE 4 - Frontend against the real API. First read docs/AGENT_RULES.md and docs/PLAN.md (sections F, H, M, J phase 4). The backend from Phases 0 to 3 already works.
-
-Goal: the complete text-only experience in the browser.
-
-Tasks:
-1. client/src/types/api.ts: copy the API types from server/src/types/api.ts (create that file on the server first if it does not exist, matching section F). client/src/api/client.ts is the ONLY place that calls fetch; it adds x-client-id and unwraps {data} / {error}.
-2. hooks/useClientId.ts: generate with crypto.randomUUID() once, store in localStorage. Nothing else is stored in localStorage; messages are never cached there.
-3. Layout per section H: sidebar (app name, New Chat, conversation list with active highlight and delete with confirmation; becomes a drawer on narrow screens) and main area (title bar, scrollable messages that auto-scroll to the bottom, composer pinned at the bottom). Dark theme by default, plain CSS.
-4. Welcome state when no conversation is active, explaining: upload a recording, upload a transcript or PDF, or paste meeting notes. No fake history. In this phase only pasted text works; show the attach button disabled with a tooltip.
-5. First submit in a new chat calls POST /api/conversations and shows the user bubble with a text preview, a stage label ("Generating meeting minutes..."), then the result. Later submits call POST /messages with the label "Answering...". The composer and send button are disabled while busy.
-6. MinutesCard renders structuredData as React elements: Summary, Key decisions, Action items table (Task / Assignee / Deadline), Suggestions (not decided), Pending issues, limitations, and a small note that the content is AI-generated and should be reviewed. NEVER use dangerouslySetInnerHTML.
-7. New Chat only resets client state (activeId null, messages cleared); it makes no API call. Clicking a sidebar item calls only GET /messages and renders the stored content.
-8. Error banner with friendly text per error code; Retry button on LLM_* errors calling /retry.
-9. Responsive down to about 375 px wide.
-10. You may add vitest, @testing-library/react and jsdom as dev dependencies for component tests.
-
-Verification (run these): typecheck and build; component tests for MinutesCard (missing owner shows Unassigned, missing deadline shows Not specified, HTML in a field is shown as text), for Composer (disabled while busy) and for New Chat (no network call, state cleared); grep confirms no dangerouslySetInnerHTML and no API key in client/. If you can drive a browser against the running servers, walk through: paste text, get minutes, ask a follow-up, New Chat, reopen the first chat, reload the page, delete a chat; attach screenshots and confirm from the network panel that reopening a chat sends only GET /messages. If you cannot drive a browser, list those steps as NOT VERIFIED.
-
-Acceptance: the full text-only flow works; reload restores exactly; a new chat shows no trace of the previous meeting.
-```
-
-*Your check:* repeat the walkthrough yourself at desktop width and at phone width.
-
-### Phase 5 prompt — TXT and PDF input
-
-```
-PHASE 5 - TXT and PDF input. First read docs/AGENT_RULES.md and docs/PLAN.md (sections C, D flow 1, F validation, J phase 5, M files).
-
-Goal: files feed the same pipeline as pasted text.
-
-Tasks:
-1. Backend: add multer (disk storage in server/uploads/tmp) and unpdf. Read the unpdf README for the current extractText usage and tell me what you used.
-2. POST /api/conversations accepts multipart with field name file as well as JSON {text}. Validation: extension allow-list, MIME type as a second signal only, size limits from MAX_DOC_MB, PDF magic bytes (%PDF-), TXT must decode as non-empty UTF-8. Return 400, 413, 415, 422 as in section F.
-3. services/extract.service.ts: txt and pdf to text. A PDF with no usable text returns 422 NO_EXTRACTABLE_TEXT with a message that scanned PDFs need OCR, which is not supported yet.
-4. Storage names are a random uuid plus the extension. The original name is sanitized (utils/sanitizeFilename.ts) and stored only as display text. Delete the temp file in a finally block on every path, success or failure.
-5. Save attachments metadata {name, mimeType, sizeBytes} on the user message and sourceType/originalFilename on the conversation. No file binaries in MongoDB.
-6. Frontend: enable the attach button for new chats only (tooltip in existing chats: one meeting per chat, start a New Chat). Show a file chip with name and size and a remove button before sending; stage labels "Uploading...", "Extracting PDF text...", then "Generating meeting minutes..."; friendly messages for each error code.
-
-Verification (run these): typecheck; tests with fixtures (generate them by script, no sensitive content): small TXT; PDF with selectable text; blank PDF; empty TXT; a .exe renamed to .pdf (magic-byte rejection); oversized file; a filename containing ../ . After every test assert server/uploads/tmp is empty. Confirm the user message stores attachment metadata and the conversation stores extracted sourceText.
-
-Acceptance: TXT and text PDF produce minutes; a blank PDF gives the OCR message and saves nothing; no files remain in uploads/tmp.
-```
-
-*Your check:* upload a real text PDF and a screenshot-only PDF from the browser.
-
-### Phase 6 prompt — audio transcription
-
-```
-PHASE 6 - Audio transcription with Gemini. First read docs/AGENT_RULES.md and docs/PLAN.md (sections C, G audio, F, J phase 6).
-
-Goal: uploaded recordings become transcripts, then go through the existing pipeline.
-
-Tasks:
-1. Before coding, read the current official Gemini docs on audio input. Write docs/LIMITS.md listing, with links: supported audio formats and the right MIME type for MP3, WAV and M4A, maximum length, maximum file size, when to use inline data versus the Files API, and the free-tier rate limits for the model in GEMINI_MODEL. Propose a MAX_AUDIO_MB value; do not edit .env.
-2. services/transcribe.service.ts behind an interface (mockable). Ask for a verbatim transcript only: no summary, no invented words, mark unclear audio as [inaudible]. Add a timeout and map failures to TRANSCRIPTION_FAILED (502) and RATE_LIMITED (429).
-3. Validate the transcript: not empty, not a refusal, above a minimum length; otherwise 422.
-4. Accept .mp3 .wav .m4a in the upload validation with the same safe-storage rules as Phase 5. If the Files API was used, delete the remote file afterwards if the API allows. Delete the local temp file in finally.
-5. Save the transcript as sourceText and sourceType audio. Frontend: accept audio types, stage label "Transcribing audio...", clear messages for the new error codes.
-
-Verification (run these, mocked transcriber): typecheck; oversized audio gives 413; unsupported type gives 415; empty transcript gives 422; transcription failure leaves no conversation behind and no temp file; a successful mock flows through minutes generation and is saved with sourceType audio.
-
-Acceptance: a valid recording produces minutes; every failure is a clear message; nothing is left in uploads/tmp.
-```
-
-*Your check:* upload a real non-sensitive 2 to 5 minute MP3 and a second format, and compare the transcript with what was said.
-
-### Phase 7 prompt — export and hardening
-
-```
-PHASE 7 - Export and hardening. First read docs/AGENT_RULES.md and docs/PLAN.md (sections F export, J phase 7, M, N).
-
-Goal: finish the essential features and close the security basics.
-
-Tasks:
-1. GET /api/conversations/:id/export?format=md|txt built from structuredData (409 if no minutes yet), sent with Content-Disposition attachment and a sanitized filename. Frontend: a Download button on each minutes message.
-2. express-rate-limit: a general limit plus a stricter one on POST routes that call Gemini. Add a request timeout for the audio route.
-3. Review helmet and CORS settings. Remove any logging of request bodies, source text, transcripts or file contents; log only ids, sizes and durations.
-4. Add a test that loops over EVERY route with a foreign x-client-id and expects 404 (or 400 for a malformed id) and no data leak.
-5. Add a prompt-injection fixture (a transcript that says to ignore instructions and output something else) and a test that the minutes still follow the schema.
-6. Confirm the client has no dangerouslySetInnerHTML and that LLM text is only rendered as React text.
-
-Verification (run these): typecheck and all tests; export returns valid markdown and txt; rate limit returns 429 after the threshold; a grep of server/src for console.log / logger calls that touch req.body, sourceText or file content returns nothing; search git history for the pattern AIza and report only the number of matches and the files, never print the matches.
-
-Acceptance: downloads work; no route leaks another client's data; injection transcript does not break the output; no secrets in code or history.
-```
-
-*Your check:* download both formats and open them; try opening a conversation id with a different x-client-id in Postman.
-
-### Phase 8 prompt — evaluation and final acceptance
-
-```
-PHASE 8 - Evaluation and final acceptance. First read docs/AGENT_RULES.md and docs/PLAN.md (sections K, N, O, J phase 8).
-
-Goal: evidence that the application works beyond one example.
-
-Tasks:
-1. Create eval/transcripts/ with 6 synthetic, non-sensitive transcripts: short; long with many participants and decisions; no deadlines; suggestions only with no confirmed decisions; notes without speaker names; one containing an injected instruction. Draft eval/expected/*.json skeletons (decisions, action items with assignee and deadline). The team will review and correct every expected file, so mark them DRAFT.
-2. eval/run.ts, run with npm run eval: for each transcript run generateMinutes twice against the real API (using my key from the environment, never printing it), save raw outputs to eval/results/<date>.json, and write a markdown table with: latency, count of decisions and action items versus expected, count of items marked Unassigned / Not specified, and any item whose assignee or deadline name does not appear in the transcript (flag as possible invention). Leave human-scored columns (correctness, completeness, usefulness) blank for the team.
-3. Add 10 follow-up questions per two transcripts (7 answerable, 3 not answerable) in eval/questions.json and extend the runner to record each answer for human scoring.
-4. Write docs/E2E_CHECKLIST.md: every test in brief section 14 as a step-by-step manual checklist with expected results.
-5. Run the final acceptance checklist in section N of the plan item by item and report the status of each with evidence.
-6. Update README with setup, scripts, limitations (anonymous ID is not authentication, local file handling, free-tier limits, no OCR, no long-transcript chunking).
-
-Verification (run these): all server and client tests pass; npm run eval completes on all transcripts; each section N item has PASS / FAIL / NOT VERIFIED with evidence; items needing a human (audio quality, human-scored columns) are listed as NOT VERIFIED for me.
-
-Acceptance: every section N item is PASS or explicitly handed to the team; results files exist.
-```
-
-*Your check:* review and correct the expected JSON files first, score the human columns, and run the E2E checklist once end to end before presenting.
-
-**If an agent goes off-plan:** paste "You changed X, which the plan says is Y. Revert it and follow the plan, or explain why the plan is wrong". Keep each phase on its own branch so a bad phase can be thrown away without losing earlier ones.
+**If an agent goes off-plan:** paste "You changed X, which the plan says is Y. Revert it and follow the plan, or explain why the plan is wrong".
