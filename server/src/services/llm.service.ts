@@ -1,4 +1,6 @@
 import type { Minutes } from '../schemas/minutes.schema.js';
+import { env } from '../config/env.js';
+import { GeminiLlmClient } from './gemini.llm.service.js';
 
 export interface LlmClient {
   generateMinutes(text: string): Promise<Minutes>;
@@ -54,7 +56,9 @@ export class StubLlmClient implements LlmClient {
   }
 }
 
-let activeLlmClient: LlmClient = new StubLlmClient();
+let activeLlmClient: LlmClient = env.GEMINI_API_KEY
+  ? new GeminiLlmClient(env.GEMINI_API_KEY, env.GEMINI_MODEL, env.GEMINI_TIMEOUT_MS)
+  : new StubLlmClient();
 
 export function getLlmClient(): LlmClient {
   return activeLlmClient;
@@ -63,4 +67,3 @@ export function getLlmClient(): LlmClient {
 export function setLlmClient(client: LlmClient): void {
   activeLlmClient = client;
 }
-

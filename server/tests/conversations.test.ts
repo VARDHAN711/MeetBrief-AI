@@ -35,6 +35,7 @@ describe('Phase 1 - Persistence core & conversations API', () => {
   beforeEach(async () => {
     await Conversation.deleteMany({});
     await Message.deleteMany({});
+    llmService.setLlmClient(new llmService.StubLlmClient());
   });
 
   it('prints and validates actual indexes on both collections', async () => {

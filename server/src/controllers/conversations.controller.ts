@@ -142,11 +142,16 @@ export async function createConversation(
     );
     const errorSeq = updatedForError ? updatedForError.messageCount : userSeq + 1;
 
+    const friendlyContent =
+      llmError instanceof AppError
+        ? llmError.message
+        : 'Failed to generate meeting minutes. Please try again.';
+
     const errorMessage = new Message({
       conversationId: conversation._id,
       seq: errorSeq,
       role: 'assistant',
-      content: 'Failed to generate meeting minutes. Please try again.',
+      content: friendlyContent,
       messageType: 'error',
     });
     await errorMessage.save();

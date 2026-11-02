@@ -14,6 +14,12 @@ const envSchema = z.object({
     required_error: 'GEMINI_MODEL is required',
     invalid_type_error: 'GEMINI_MODEL must be a string',
   }).min(1, 'GEMINI_MODEL is required').default('gemini-2.5-flash'),
+  GEMINI_TIMEOUT_MS: z.preprocess(
+    (val) => (val === '' || val === undefined ? undefined : val),
+    z.coerce.number({
+      invalid_type_error: 'GEMINI_TIMEOUT_MS must be a number',
+    }).int().positive().default(60_000)
+  ),
   CLIENT_ORIGIN: z.string({
     required_error: 'CLIENT_ORIGIN is required',
     invalid_type_error: 'CLIENT_ORIGIN must be a string',
