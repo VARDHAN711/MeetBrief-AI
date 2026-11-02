@@ -1,0 +1,19 @@
+import { Router } from 'express';
+import { clientIdMiddleware } from '../middleware/clientId.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
+import {
+  listConversations,
+  createConversation,
+  getConversationMessages,
+  deleteConversation,
+} from '../controllers/conversations.controller.js';
+
+export const conversationsRouter = Router();
+
+conversationsRouter.use(clientIdMiddleware);
+
+conversationsRouter.get('/', asyncHandler(listConversations));
+conversationsRouter.post('/', asyncHandler(createConversation));
+conversationsRouter.get('/:id/messages', asyncHandler(getConversationMessages));
+conversationsRouter.delete('/:id', asyncHandler(deleteConversation));
+
