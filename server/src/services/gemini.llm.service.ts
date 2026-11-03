@@ -8,16 +8,27 @@
  * - https://ai.google.dev/gemini-api/docs/rate-limits — 429 / RESOURCE_EXHAUSTED
  * - SDK declarations: @google/genai v2.32.0, dist/genai.d.ts
  *   - GoogleGenAIOptions.apiKey (line 7653) — must be passed explicitly
+ *   - GenerateContentParameters.contents: ContentListUnion (line 6469)
+ *   - Content.role: 'user' or 'model' (line 2272)
+ *   - GenerateContentConfig.systemInstruction (line 6295)
  *   - GenerateContentConfig.abortSignal (line 6288)
- *   - GenerateContentConfig.responseMimeType (line 6354)
- *   - GenerateContentConfig.responseJsonSchema (line 6381) — preferred JSON Schema field
+ *   - GenerateContentConfig.temperature (line 6301)
+ *   - GenerateContentConfig.responseMimeType (line 6354) — text/plain default; application/json for minutes
+ *   - GenerateContentConfig.responseJsonSchema (line 6381) — preferred JSON Schema field; minutes only
  *   - GenerateContentConfig.responseSchema (line 6365) — OpenAPI Schema; skipped
  *   - ApiError.status: HTTP number (line 553)
+ * Multi-turn shape follows the same generateContent call (contents as Content[]).
+ * Live doc fetch was not used; signatures are from this installed SDK.
  */
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, type Content, type ContentListUnion } from '@google/genai';
 import { MinutesSchema, type Minutes } from '../schemas/minutes.schema.js';
 import { AppError } from '../utils/AppError.js';
 import { MINUTES_SYSTEM_INSTRUCTION, buildMinutesUserMessage } from '../prompts/minutes.js';
+import {
+  buildFollowupSystemInstruction,
+  limitFollowupHistory,
+  type FollowupTurn,
+} from '../prompts/followup.js';
 import type { LlmClient } from './llm.service.js';
 
 const DEFAULT_GEMINI_TIMEOUT_MS = 60_000;
@@ -256,6 +267,49 @@ function parseAndValidate(raw: string): { minutes: Minutes } | { error: string }
   return { minutes: result.data };
 }
 
+/**
+ * Normalizes a list of Content turns for Gemini multi-turn generation:
+ * 1. Drops leading model turns so the conversation always starts with a user turn.
+ * 2. Merges adjacent same-role turns into one turn, joining text with a blank line (\n\n).
+ * 3. Guarantees the turns strictly alternate user -> model -> user -> ...
+ */
+export function normalizeGeminiTurns(turns: readonly Content[]): Content[] {
+  let startIndex = 0;
+  while (startIndex < turns.length && turns[startIndex].role === 'model') {
+    startIndex++;
+  }
+  const slice = turns.slice(startIndex);
+  if (slice.length === 0) {
+    return [];
+  }
+
+  const normalized: Content[] = [];
+  for (const turn of slice) {
+    const text = turn.parts?.[0]?.text ?? '';
+    const last = normalized[normalized.length - 1];
+    if (last && last.role === turn.role) {
+      const prevText = last.parts?.[0]?.text ?? '';
+      last.parts = [{ text: prevText ? `${prevText}\n\n${text}` : text }];
+    } else {
+      normalized.push({
+        role: turn.role,
+        parts: [{ text }],
+      });
+    }
+  }
+
+  return normalized;
+}
+
+export function toGeminiContents(history: readonly FollowupTurn[], question: string): Content[] {
+  const raw: Content[] = history.map((turn) => ({
+    role: turn.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: turn.content }],
+  }));
+  raw.push({ role: 'user', parts: [{ text: question }] });
+  return normalizeGeminiTurns(raw);
+}
+
 export class GeminiLlmClient implements LlmClient {
   private readonly ai: GoogleGenAI;
   private readonly model: string;
@@ -282,25 +336,9 @@ export class GeminiLlmClient implements LlmClient {
   async generateMinutes(text: string): Promise<Minutes> {
     const userMessage = buildMinutesUserMessage(text);
 
-    let rawJson: string;
-    try {
-      rawJson = await this.callGeminiTimed(userMessage);
-    } catch (err) {
-      if (err instanceof AppError) throw err;
-      if (isRateLimitError(err)) {
-        const delayMs = extractRetryAfterMs(err);
-        if (delayMs > 0) {
-          await new Promise<void>((r) => setTimeout(r, delayMs));
-        }
-        try {
-          rawJson = await this.callGeminiTimed(userMessage);
-        } catch (retryErr) {
-          throw this.fail(retryErr);
-        }
-      } else {
-        throw this.fail(err);
-      }
-    }
+    const rawJson = await this.withRateLimitRetry(() =>
+      this.callGeminiTimed(() => this._callGemini(userMessage))
+    );
 
     const firstResult = parseAndValidate(rawJson);
     if ('minutes' in firstResult) {
@@ -311,7 +349,7 @@ export class GeminiLlmClient implements LlmClient {
 
     let repairJson: string;
     try {
-      repairJson = await this.callGeminiTimed(repairMessage);
+      repairJson = await this.callGeminiTimed(() => this._callGemini(repairMessage));
     } catch (repairErr) {
       throw this.fail(repairErr);
     }
@@ -328,19 +366,65 @@ export class GeminiLlmClient implements LlmClient {
     );
   }
 
+  /**
+   * Answer a follow-up from the full source text.
+   * History is the last 10 turns (caller should already omit error messages);
+   * the question is the final user turn. Plain text — no JSON schema.
+   * Transport failures use the same timeout, rate-limit retry, mapping, and
+   * one-line diagnostic log as generateMinutes.
+   */
+  async answerQuestion(sourceText: string, history: FollowupTurn[], question: string): Promise<string> {
+    const systemInstruction = buildFollowupSystemInstruction(sourceText);
+    const contents = toGeminiContents(limitFollowupHistory(history), question);
+
+    return this.withRateLimitRetry(() =>
+      this.callGeminiTimed(() =>
+        this._generate({
+          systemInstruction,
+          contents,
+          responseMimeType: 'text/plain',
+        })
+      )
+    );
+  }
+
   private fail(err: unknown): AppError {
     if (err instanceof AppError) return err;
     return mapGeminiError(err);
   }
 
   /**
-   * Runs _callGemini, logs exactly one diagnostic line on API/network/timeout failure,
-   * then rethrows the original error (or AppError for empty/safety responses).
+   * One attempt, then at most one retry when the failure is a rate limit.
+   * AppErrors (empty response, safety block) are not retried.
    */
-  private async callGeminiTimed(userContent: string): Promise<string> {
+  private async withRateLimitRetry(run: () => Promise<string>): Promise<string> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      if (isRateLimitError(err)) {
+        const delayMs = extractRetryAfterMs(err);
+        if (delayMs > 0) {
+          await new Promise<void>((r) => setTimeout(r, delayMs));
+        }
+        try {
+          return await run();
+        } catch (retryErr) {
+          throw this.fail(retryErr);
+        }
+      }
+      throw this.fail(err);
+    }
+  }
+
+  /**
+   * Logs exactly one diagnostic line on API/network/timeout failure,
+   * then rethrows the original error (AppError for empty/safety is not logged).
+   */
+  private async callGeminiTimed(run: () => Promise<string>): Promise<string> {
     const started = Date.now();
     try {
-      return await this._callGemini(userContent);
+      return await run();
     } catch (err) {
       if (!(err instanceof AppError)) {
         logGeminiFailure(err, Date.now() - started, this.model);
@@ -350,23 +434,42 @@ export class GeminiLlmClient implements LlmClient {
   }
 
   /**
-   * Single call to Gemini generateContent with AbortController timeout.
-   * Throws ApiError on API errors, DOMException/AbortError on timeout.
+   * Minutes call. Spies in tests replace this method; keep the string signature.
    */
   private async _callGemini(userContent: string): Promise<string> {
+    return this._generate({
+      systemInstruction: MINUTES_SYSTEM_INSTRUCTION,
+      contents: userContent,
+      responseMimeType: 'application/json',
+      responseJsonSchema: MINUTES_RESPONSE_JSON_SCHEMA,
+    });
+  }
+
+  /**
+   * Single generateContent call with AbortController timeout.
+   * Throws ApiError on API errors, AbortError on timeout, AppError on empty/safety.
+   */
+  private async _generate(params: {
+    systemInstruction: string;
+    contents: ContentListUnion;
+    responseMimeType: string;
+    responseJsonSchema?: unknown;
+  }): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const response = await this.ai.models.generateContent({
         model: this.model,
-        contents: userContent,
+        contents: params.contents,
         config: {
-          systemInstruction: MINUTES_SYSTEM_INSTRUCTION,
+          systemInstruction: params.systemInstruction,
           temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseJsonSchema: MINUTES_RESPONSE_JSON_SCHEMA,
+          responseMimeType: params.responseMimeType,
           abortSignal: controller.signal,
+          ...(params.responseJsonSchema !== undefined
+            ? { responseJsonSchema: params.responseJsonSchema }
+            : {}),
         },
       });
 

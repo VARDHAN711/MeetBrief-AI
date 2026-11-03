@@ -64,3 +64,11 @@ export interface GetMessagesResponse {
   messages: MessageItem[];
 }
 
+export interface PostMessagesResponse {
+  messages: MessageItem[];
+}
+
+export interface RetryMessageResponse {
+  message: MessageItem;
+}
+

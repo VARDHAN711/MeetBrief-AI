@@ -285,6 +285,7 @@ describe('Phase 2 - Gemini LLM Client & Minutes Generation', () => {
   describe('POST /api/conversations Integration with Mocked LLM', () => {
     it('saves user message, calls LLM, saves assistant minutes message, and sets title', async () => {
       const mockLlm: llmService.LlmClient = {
+        answerQuestion: vi.fn(),
         generateMinutes: vi.fn().mockResolvedValue(SAMPLE_VALID_MINUTES),
       };
       llmService.setLlmClient(mockLlm);
@@ -311,6 +312,7 @@ describe('Phase 2 - Gemini LLM Client & Minutes Generation', () => {
 
     it('saves assistant error message and returns 429 when LLM hits RATE_LIMITED', async () => {
       const mockLlm: llmService.LlmClient = {
+        answerQuestion: vi.fn(),
         generateMinutes: vi.fn().mockRejectedValue(
           new AppError(429, 'RATE_LIMITED', 'The AI service is busy. Please try again in a minute.')
         ),
@@ -339,6 +341,7 @@ describe('Phase 2 - Gemini LLM Client & Minutes Generation', () => {
 
     it('saves assistant error message and returns 502 when LLM hits LLM_UNAVAILABLE', async () => {
       const mockLlm: llmService.LlmClient = {
+        answerQuestion: vi.fn(),
         generateMinutes: vi.fn().mockRejectedValue(
           new AppError(502, 'LLM_UNAVAILABLE', 'The AI service is currently unavailable. Please try again later.')
         ),
@@ -360,6 +363,7 @@ describe('Phase 2 - Gemini LLM Client & Minutes Generation', () => {
 
     it('saves assistant error message and returns 504 when LLM hits LLM_TIMEOUT', async () => {
       const mockLlm: llmService.LlmClient = {
+        answerQuestion: vi.fn(),
         generateMinutes: vi.fn().mockRejectedValue(
           new AppError(504, 'LLM_TIMEOUT', 'The AI service took too long to respond.')
         ),
@@ -382,6 +386,7 @@ describe('Phase 2 - Gemini LLM Client & Minutes Generation', () => {
 
     it('saves assistant error message and returns 502 when LLM hits LLM_CONFIG_ERROR', async () => {
       const mockLlm: llmService.LlmClient = {
+        answerQuestion: vi.fn(),
         generateMinutes: vi.fn().mockRejectedValue(
           new AppError(502, 'LLM_CONFIG_ERROR', 'The AI service is not configured correctly.')
         ),
@@ -400,6 +405,7 @@ describe('Phase 2 - Gemini LLM Client & Minutes Generation', () => {
 
     it('ensures no source text appears in server logs (log scrubbing)', async () => {
       const mockLlm: llmService.LlmClient = {
+        answerQuestion: vi.fn(),
         generateMinutes: vi.fn().mockResolvedValue(SAMPLE_VALID_MINUTES),
       };
       llmService.setLlmClient(mockLlm);

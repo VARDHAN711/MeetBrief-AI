@@ -33,5 +33,9 @@ export class AppError extends Error {
   static conversationNotFound(message = 'Conversation not found'): AppError {
     return new AppError(404, 'CONVERSATION_NOT_FOUND', message);
   }
+
+  static conflict(code: string, message: string): AppError {
+    return new AppError(409, code, message);
+  }
 }
 

@@ -1,9 +1,11 @@
 import type { Minutes } from '../schemas/minutes.schema.js';
+import type { FollowupTurn } from '../prompts/followup.js';
 import { env } from '../config/env.js';
 import { GeminiLlmClient } from './gemini.llm.service.js';
 
 export interface LlmClient {
   generateMinutes(text: string): Promise<Minutes>;
+  answerQuestion(sourceText: string, history: FollowupTurn[], question: string): Promise<string>;
 }
 
 export const STUB_MINUTES: Minutes = {
@@ -53,6 +55,10 @@ export const STUB_MINUTES: Minutes = {
 export class StubLlmClient implements LlmClient {
   async generateMinutes(_text: string): Promise<Minutes> {
     return structuredClone(STUB_MINUTES);
+  }
+
+  async answerQuestion(_sourceText: string, _history: FollowupTurn[], _question: string): Promise<string> {
+    return 'The source does not contain that information.';
   }
 }
 

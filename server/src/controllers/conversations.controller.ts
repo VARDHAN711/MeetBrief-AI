@@ -12,9 +12,13 @@ import type {
   MessageItem,
   CreateConversationResponse,
   GetMessagesResponse,
+  PostMessagesResponse,
+  RetryMessageResponse,
   ApiResponse,
 } from '../types/api.js';
 import type { Minutes } from '../schemas/minutes.schema.js';
+import { followupMessageBodySchema } from '../schemas/followup.schema.js';
+import { FOLLOWUP_HISTORY_LIMIT, type FollowupTurn } from '../prompts/followup.js';
 
 function formatConversationDetail(conv: IConversation): ConversationDetail {
   return {
@@ -246,4 +250,206 @@ export async function deleteConversation(req: Request, res: Response): Promise<v
   await Conversation.deleteOne({ _id: conversation._id, clientId });
 
   res.status(204).end();
+}
+
+function friendlyLlmContent(err: unknown, fallback: string): string {
+  return err instanceof AppError ? err.message : fallback;
+}
+
+async function findOwnedConversation(clientId: string, rawId: string | string[] | undefined): Promise<IConversation> {
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    throw AppError.invalidId();
+  }
+  const conversation = await Conversation.findOne({ _id: id, clientId });
+  if (!conversation) {
+    throw AppError.conversationNotFound();
+  }
+  return conversation;
+}
+
+async function allocateSeq(conversationId: mongoose.Types.ObjectId, clientId: string): Promise<number> {
+  const updated = await Conversation.findOneAndUpdate(
+    { _id: conversationId, clientId },
+    { $inc: { messageCount: 1 } },
+    { new: true }
+  );
+  if (!updated) {
+    throw AppError.conversationNotFound();
+  }
+  return updated.messageCount;
+}
+
+/**
+ * Last 10 non-error messages, excluding the current question, oldest first.
+ * Error messages are never included.
+ */
+async function loadFollowupHistory(
+  conversationId: mongoose.Types.ObjectId,
+  excludeMessageId: mongoose.Types.ObjectId
+): Promise<FollowupTurn[]> {
+  const recent = await Message.find({
+    conversationId,
+    messageType: { $ne: 'error' },
+    _id: { $ne: excludeMessageId },
+  })
+    .sort({ seq: -1 })
+    .limit(FOLLOWUP_HISTORY_LIMIT)
+    .select({ role: 1, content: 1 });
+
+  return recent.reverse().map((msg) => ({
+    role: msg.role,
+    content: msg.content,
+  }));
+}
+
+/**
+ * POST /api/conversations/:id/messages
+ * Saves the user question, answers from the full sourceText, saves the assistant reply.
+ * On LLM failure the user message stays and an error message is stored.
+ */
+export async function postConversationMessage(
+  req: Request,
+  res: Response<ApiResponse<PostMessagesResponse>>
+): Promise<void> {
+  const clientId = req.clientId!;
+  const conversation = await findOwnedConversation(clientId, req.params.id);
+
+  const parsed = followupMessageBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    const message = parsed.error.issues[0]?.message ?? 'Field "content" must be a string between 1 and 2000 characters';
+    throw AppError.badRequest('INVALID_INPUT', message);
+  }
+
+  const content = parsed.data.content;
+
+  const userSeq = await allocateSeq(conversation._id, clientId);
+  const userMessage = new Message({
+    conversationId: conversation._id,
+    seq: userSeq,
+    role: 'user',
+    content,
+    messageType: 'text',
+    attachments: [],
+  });
+  await userMessage.save();
+
+  const history = await loadFollowupHistory(conversation._id, userMessage._id);
+
+  let answer: string;
+  try {
+    answer = await getLlmClient().answerQuestion(conversation.sourceText, history, content);
+  } catch (llmError) {
+    const errorSeq = await allocateSeq(conversation._id, clientId);
+    const errorMessage = new Message({
+      conversationId: conversation._id,
+      seq: errorSeq,
+      role: 'assistant',
+      content: friendlyLlmContent(llmError, 'Failed to answer the question. Please try again.'),
+      messageType: 'error',
+      attachments: [],
+    });
+    await errorMessage.save();
+    throw llmError;
+  }
+
+  const assistantSeq = await allocateSeq(conversation._id, clientId);
+  const assistantMessage = new Message({
+    conversationId: conversation._id,
+    seq: assistantSeq,
+    role: 'assistant',
+    content: answer,
+    messageType: 'text',
+    attachments: [],
+  });
+  await assistantMessage.save();
+
+  res.status(201).json({
+    data: {
+      messages: [formatMessage(userMessage), formatMessage(assistantMessage)],
+    },
+  });
+}
+
+/**
+ * POST /api/conversations/:id/retry
+ * Replaces the last assistant error message. 409 when that message is not an error.
+ * A failed minutes generation is regenerated with generateMinutes; a failed follow-up uses answerQuestion.
+ */
+export async function retryConversationMessage(
+  req: Request,
+  res: Response<ApiResponse<RetryMessageResponse>>
+): Promise<void> {
+  const clientId = req.clientId!;
+  const conversation = await findOwnedConversation(clientId, req.params.id);
+
+  const last = await Message.findOne({ conversationId: conversation._id }).sort({ seq: -1 });
+  if (!last || last.messageType !== 'error') {
+    throw AppError.conflict(
+      'RETRY_NOT_ALLOWED',
+      'Retry is only available when the last message is an error.'
+    );
+  }
+
+  const lastUser = await Message.findOne({
+    conversationId: conversation._id,
+    role: 'user',
+    seq: { $lt: last.seq },
+  }).sort({ seq: -1 });
+
+  if (!lastUser) {
+    throw AppError.conflict(
+      'RETRY_NOT_ALLOWED',
+      'Retry is only available when the last message is an error.'
+    );
+  }
+
+  const openingUser = await Message.findOne({
+    conversationId: conversation._id,
+    role: 'user',
+  }).sort({ seq: 1 });
+
+  const minutesAlreadySaved = await Message.exists({
+    conversationId: conversation._id,
+    messageType: 'minutes',
+    seq: { $lt: last.seq },
+  });
+
+  const retryingMinutes =
+    !minutesAlreadySaved && openingUser !== null && lastUser._id.equals(openingUser._id);
+
+  try {
+    if (retryingMinutes) {
+      const minutes = await getLlmClient().generateMinutes(conversation.sourceText);
+      last.content = formatMinutesToMarkdown(minutes);
+      last.messageType = 'minutes';
+      last.structuredData = minutes;
+      await last.save();
+
+      conversation.title = minutes.title || conversation.sourceText.slice(0, 40);
+      await conversation.save();
+    } else {
+      const history = await loadFollowupHistory(conversation._id, lastUser._id);
+      const answer = await getLlmClient().answerQuestion(
+        conversation.sourceText,
+        history,
+        lastUser.content
+      );
+      last.content = answer;
+      last.messageType = 'text';
+      last.structuredData = undefined;
+      await last.save();
+    }
+  } catch (llmError) {
+    last.content = friendlyLlmContent(llmError, 'Failed to regenerate the reply. Please try again.');
+    last.messageType = 'error';
+    await last.save();
+    throw llmError;
+  }
+
+  res.status(200).json({
+    data: {
+      message: formatMessage(last),
+    },
+  });
 }
