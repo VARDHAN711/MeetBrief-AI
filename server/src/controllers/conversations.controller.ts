@@ -160,7 +160,10 @@ export async function createConversation(
     });
     await errorMessage.save();
 
-    throw llmError;
+    const mappedError = llmError instanceof AppError
+      ? new AppError(llmError.statusCode, llmError.code, llmError.message, conversation._id.toString())
+      : new AppError(502, 'LLM_UNAVAILABLE', 'Failed to generate meeting minutes. Please try again.', conversation._id.toString());
+    throw mappedError;
   }
 
   // 4. Save assistant minutes message

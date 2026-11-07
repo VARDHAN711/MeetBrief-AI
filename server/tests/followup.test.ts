@@ -293,6 +293,39 @@ describe('Phase 3 - follow-up messages and retry (mocked LLM)', () => {
     expect(messages).toHaveLength(2);
   });
 
+  it('returns the failed creation id, restores the stored error, retries it, and hides it from other clients', async () => {
+    const generateMinutes = vi.fn()
+      .mockRejectedValueOnce(new AppError(502, 'LLM_UNAVAILABLE', 'AI unavailable'))
+      .mockResolvedValueOnce(llmService.STUB_MINUTES);
+    const failingClient: llmService.LlmClient = {
+      generateMinutes,
+      answerQuestion: vi.fn().mockResolvedValue('Recovered answer'),
+    };
+    llmService.setLlmClient(failingClient);
+    const failed = await request(app).post('/api/conversations').set('x-client-id', OWNER).send({ text: SOURCE });
+    expect(failed.status).toBe(502);
+    expect(failed.body.error).toEqual({ code: 'LLM_UNAVAILABLE', message: 'AI unavailable', conversationId: expect.any(String) });
+    const id = failed.body.error.conversationId as string;
+    const restored = await request(app).get(`/api/conversations/${id}/messages`).set('x-client-id', OWNER);
+    expect(restored.status).toBe(200);
+    expect(restored.body.data.messages.map((msg: MessageItem) => [msg.role, msg.messageType])).toEqual([
+      ['user', 'text'], ['assistant', 'error'],
+    ]);
+    const retried = await request(app).post(`/api/conversations/${id}/retry`).set('x-client-id', OWNER);
+    expect(retried.status).toBe(200);
+    expect(retried.body.data.message.messageType).toBe('minutes');
+    expect((failingClient.generateMinutes as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(2);
+    const foreign = await request(app).get(`/api/conversations/${id}/messages`).set('x-client-id', OTHER);
+    expect(foreign.status).toBe(404);
+  });
+
+  it('does not include conversationId for validation errors', async () => {
+    const res = await request(app).post('/api/conversations').set('x-client-id', OWNER).send({ text: 'short' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toEqual({ code: 'INVALID_INPUT', message: expect.any(String) });
+    expect(res.body.error).not.toHaveProperty('conversationId');
+  });
+
   it('returns 404 for a foreign clientId on messages and retry', async () => {
     useMock(async () => {
       throw new AppError(502, 'LLM_UNAVAILABLE', 'The AI service is currently unavailable. Please try again later.');

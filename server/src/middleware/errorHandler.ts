@@ -19,6 +19,7 @@ export const errorHandler: ErrorRequestHandler = (
       error: {
         code: err.code,
         message: err.message,
+        ...(err.conversationId ? { conversationId: err.conversationId } : {}),
       },
     });
     return;

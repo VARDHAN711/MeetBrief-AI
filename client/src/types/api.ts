@@ -36,6 +36,7 @@ export interface ApiError {
   error: {
     code: string;
     message: string;
+    conversationId?: string;
   };
 }
 
@@ -91,4 +92,7 @@ export interface GetMessagesResponse {
   conversation: ConversationDetail;
   messages: MessageItem[];
 }
+
+export interface PostMessagesResponse { messages: MessageItem[]; }
+export interface RetryMessageResponse { message: MessageItem; }
 
