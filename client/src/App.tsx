@@ -19,8 +19,12 @@ const friendly: Record<string, string> = {
   RETRY_NOT_ALLOWED: 'There is no failed response to retry.',
   BAD_REQUEST: 'The request could not be understood. Please try again.',
   INTERNAL_SERVER_ERROR: 'The server encountered a problem. Please try again.',
+  UNSUPPORTED_FILE_TYPE: 'Choose a TXT or PDF file. Audio and other file types are not supported yet.',
+  INVALID_FILE: 'That file is empty, corrupt, or not a valid TXT or PDF file.',
+  NO_EXTRACTABLE_TEXT: 'This PDF seems to be scanned or image-only. This version needs a PDF with selectable text.',
 };
 const retryable = new Set(['RATE_LIMITED', 'LLM_UNAVAILABLE', 'LLM_EMPTY', 'LLM_BAD_OUTPUT', 'LLM_TIMEOUT']);
+const FILE_STAGE_PAUSE_MS = 120;
 
 export function MinutesCard({ minutes }: { minutes: Minutes }) {
   return <article className="minutes-card">
@@ -34,14 +38,48 @@ export function MinutesCard({ minutes }: { minutes: Minutes }) {
   </article>;
 }
 
-export function Composer({ busy, onSend }: { busy: boolean; onSend: (text: string) => void }) {
+export function Composer({
+  busy,
+  onSend,
+  allowUpload = true,
+  selectedFile = null,
+  onFileChange = () => undefined,
+}: {
+  busy: boolean;
+  onSend: (text: string, file?: File) => void;
+  allowUpload?: boolean;
+  selectedFile?: File | null;
+  onFileChange?: (file: File | null) => void;
+}) {
   const [text, setText] = useState('');
-  const submit = (event: FormEvent) => { event.preventDefault(); if (!busy && text.trim()) { onSend(text.trim()); setText(''); } };
+  const fileInput = useRef<HTMLInputElement>(null);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!busy && (text.trim() || selectedFile)) {
+      onSend(text.trim(), selectedFile ?? undefined);
+      setText('');
+    }
+  };
+  const disabledTitle = 'One meeting per chat. Start a New Chat to upload another';
   return <form className="composer" onSubmit={submit}>
-    <button type="button" className="attach" disabled title="File uploads are coming in a later phase">＋</button>
-    <textarea aria-label="Message" placeholder="Paste meeting notes or ask a question…" value={text} onChange={e => setText(e.target.value)} disabled={busy} rows={2} />
-    <button type="submit" disabled={busy || !text.trim()}>{busy ? 'Working…' : 'Send'}</button>
+    {selectedFile && <div className="file-chip">
+      <span className="file-chip-icon">▤</span>
+      <span className="file-chip-text"><strong>{selectedFile.name}</strong><small>{formatFileSize(selectedFile.size)}</small></span>
+      <button type="button" aria-label="Remove attached file" onClick={() => { onFileChange(null); if (fileInput.current) fileInput.current.value = ''; }}>×</button>
+    </div>}
+    <div className="composer-row">
+      <button type="button" className="attach" disabled={busy || !allowUpload} title={allowUpload ? 'Attach a TXT or PDF file' : disabledTitle} onClick={() => fileInput.current?.click()}>＋</button>
+      <input ref={fileInput} className="file-input" type="file" accept=".txt,.pdf,text/plain,application/pdf" aria-label="Attach a TXT or PDF file" onChange={event => onFileChange(event.target.files?.[0] ?? null)} />
+      <textarea aria-label="Message" placeholder="Paste meeting notes or ask a question…" value={text} onChange={e => setText(e.target.value)} disabled={busy} rows={2} />
+      <button type="submit" disabled={busy || (!text.trim() && !selectedFile)}>{busy ? 'Working…' : 'Send'}</button>
+    </div>
   </form>;
+}
+
+function formatFileSize(sizeBytes: number): string {
+  return sizeBytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(sizeBytes / 1024))} KB`
+    : `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function ErrorMessage({ message, onRetry, retrying }: { message: MessageItem; onRetry?: () => void; retrying: boolean }) {
@@ -58,6 +96,7 @@ export default function App() {
   const [banner, setBanner] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [retryAllowed, setRetryAllowed] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const active = conversations.find(c => c.id === activeId);
 
@@ -76,7 +115,7 @@ export default function App() {
   }, [clientId]);
   useEffect(() => { if (scrollRef.current) { if (scrollRef.current.scrollTo) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); else scrollRef.current.scrollTop = scrollRef.current.scrollHeight; } }, [messages, stage]);
 
-  const startNew = () => { setActiveId(null); setMessages([]); setBanner(''); setStage(''); setRetryAllowed(false); setMobileOpen(false); };
+  const startNew = () => { setActiveId(null); setMessages([]); setBanner(''); setStage(''); setRetryAllowed(false); setSelectedFile(null); setMobileOpen(false); };
   const openChat = async (id: string) => {
     setBusy(true); setBanner('');
     try { const result = await api.messages(clientId, id); setActiveId(id); setMessages(result.messages); setRetryAllowed(result.messages.at(-1)?.messageType === 'error'); setMobileOpen(false); }
@@ -93,13 +132,32 @@ export default function App() {
       void refresh();
     }
   };
-  const send = async (text: string) => {
+  const send = async (text: string, file?: File) => {
     setBusy(true); setBanner('');
     if (!activeId) {
-      const optimistic: MessageItem = { id: `local-${Date.now()}`, conversationId: '', seq: 0, role: 'user', content: text, messageType: 'text', attachments: [], createdAt: new Date().toISOString() };
-      setMessages([optimistic]); setStage('Generating meeting minutes…');
-      try { const result = await api.create(clientId, text); setActiveId(result.conversation.id); setMessages(result.messages); setRetryAllowed(false); await refresh(); }
-      catch (e) { handleFailure(e); }
+      const displayText = file ? `Uploaded file: ${file.name}` : text;
+      const optimistic: MessageItem = { id: `local-${Date.now()}`, conversationId: '', seq: 0, role: 'user', content: displayText, messageType: 'text', attachments: file ? [{ name: file.name, mimeType: file.type || 'application/octet-stream', sizeBytes: file.size }] : [], createdAt: new Date().toISOString() };
+      setMessages([optimistic]);
+      try {
+        let resultPromise: ReturnType<typeof api.create>;
+        if (file) {
+          setStage('Uploading...');
+          resultPromise = api.create(clientId, file);
+          void resultPromise.catch(() => undefined);
+          await new Promise<void>(resolve => window.setTimeout(resolve, FILE_STAGE_PAUSE_MS));
+          if (file.name.toLowerCase().endsWith('.pdf')) {
+            setStage('Extracting PDF text...');
+            await new Promise<void>(resolve => window.setTimeout(resolve, FILE_STAGE_PAUSE_MS));
+          }
+          setStage('Generating meeting minutes...');
+        } else {
+          setStage('Generating meeting minutes...');
+          resultPromise = api.create(clientId, text);
+        }
+        const result = await resultPromise;
+        setActiveId(result.conversation.id); setMessages(result.messages); setRetryAllowed(false); setSelectedFile(null); await refresh();
+      }
+      catch (e) { handleFailure(e); if (e instanceof ApiRequestError && e.conversationId) setSelectedFile(null); }
       finally { setBusy(false); setStage(''); }
     } else {
       setStage('Answering…');
@@ -149,7 +207,7 @@ export default function App() {
         {!activeId && messages.length === 0 ? <div className="welcome"><div className="welcome-orb">✳</div><p className="eyebrow">MEETBRIEF AI</p><h1>Make every meeting<br /><em>clear and actionable.</em></h1><p className="welcome-copy">Turn conversations into decisions, action items, and answers you can come back to.</p><div className="welcome-options"><div><b>◉</b><span><strong>Upload a recording</strong><small>Audio transcription</small></span></div><div><b>▤</b><span><strong>Upload a transcript or PDF</strong><small>Bring your meeting notes</small></span></div><div><b>✎</b><span><strong>Paste meeting notes</strong><small>Start with text below</small></span></div></div></div> : <div className="messages">{messages.map(m => <div className={`message-row ${m.role}`} key={m.id}><div className="avatar">{m.role === 'user' ? 'You' : 'M'}</div><div className="message-body">{m.messageType === 'minutes' && m.structuredData ? <MinutesCard minutes={m.structuredData} /> : m.messageType === 'error' ? <ErrorMessage message={m} onRetry={m.id === messages.at(-1)?.id && retryAllowed ? retry : undefined} retrying={busy} /> : <div className="bubble">{m.content}</div>}</div></div>)}{stage && <div className="stage"><span className="spinner" />{stage}</div>}</div>}
       </div>
       {banner && <div role="alert" className="banner"><span>{banner}</span><button onClick={() => setBanner('')} aria-label="Dismiss error">×</button></div>}
-      <Composer busy={busy} onSend={send} />
+      <Composer busy={busy} onSend={send} allowUpload={!activeId} selectedFile={selectedFile} onFileChange={setSelectedFile} />
       <p className="privacy-note">Meetings are private to this browser · AI-generated content should be reviewed</p>
     </main>
   </div>;

@@ -39,5 +39,17 @@ export class AppError extends Error {
   static conflict(code: string, message: string): AppError {
     return new AppError(409, code, message);
   }
+
+  static unsupportedFileType(message = 'Only .txt and .pdf files are supported.'): AppError {
+    return new AppError(415, 'UNSUPPORTED_FILE_TYPE', message);
+  }
+
+  static invalidFile(message = 'The uploaded file is empty or invalid.'): AppError {
+    return new AppError(400, 'INVALID_FILE', message);
+  }
+
+  static noExtractableText(message = 'This PDF seems to be scanned or image-only. This version needs a PDF with selectable text.'): AppError {
+    return new AppError(422, 'NO_EXTRACTABLE_TEXT', message);
+  }
 }
 

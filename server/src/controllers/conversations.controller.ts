@@ -1,11 +1,13 @@
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import { unlink } from 'node:fs/promises';
 import { env } from '../config/env.js';
 import { Conversation, type IConversation } from '../models/Conversation.js';
 import { Message, type IMessage } from '../models/Message.js';
 import { getLlmClient } from '../services/llm.service.js';
 import { formatMinutesToMarkdown } from '../services/minutesFormatter.js';
 import { AppError } from '../utils/AppError.js';
+import { extractUploadedFile } from '../services/extract.service.js';
 import type {
   ConversationSummary,
   ConversationDetail,
@@ -80,123 +82,139 @@ export async function createConversation(
   res: Response<ApiResponse<CreateConversationResponse>>
 ): Promise<void> {
   const clientId = req.clientId!;
-  const body = req.body as { text?: unknown };
+  const uploadedFile = req.file;
+  let responseBody: ApiResponse<CreateConversationResponse> | undefined;
 
-  if (typeof body?.text !== 'string') {
-    throw AppError.badRequest('INVALID_INPUT', 'Field "text" is required and must be a string');
-  }
-
-  const rawText = body.text;
-  const trimmed = rawText.trim();
-
-  if (trimmed.length < 30) {
-    throw AppError.badRequest(
-      'INVALID_INPUT',
-      'Meeting text is too short (minimum 30 characters required)'
-    );
-  }
-
-  if (rawText.length > env.MAX_TEXT_CHARS) {
-    throw AppError.payloadTooLarge(
-      'PAYLOAD_TOO_LARGE',
-      `Meeting text exceeds maximum length of ${env.MAX_TEXT_CHARS} characters`
-    );
-  }
-
-  // 1. Create conversation document
-  const conversation = new Conversation({
-    clientId,
-    title: 'Generating minutes...',
-    sourceType: 'text',
-    sourceText: rawText,
-    messageCount: 0,
-  });
-  await conversation.save();
-
-  // 2. Allocate seq 1 for user message
-  const updatedForUser = await Conversation.findOneAndUpdate(
-    { _id: conversation._id, clientId },
-    { $inc: { messageCount: 1 } },
-    { new: true }
-  );
-
-  const userSeq = updatedForUser ? updatedForUser.messageCount : 1;
-
-  const userMessage = new Message({
-    conversationId: conversation._id,
-    seq: userSeq,
-    role: 'user',
-    content: rawText,
-    messageType: 'text',
-    attachments: [],
-  });
-  await userMessage.save();
-
-  // 3. Call LLM to generate minutes
-  let minutes: Minutes;
   try {
-    const llmClient = getLlmClient();
-    minutes = await llmClient.generateMinutes(rawText);
-  } catch (llmError) {
-    // If LLM fails after user message is saved, save assistant error message
-    const updatedForError = await Conversation.findOneAndUpdate(
+    let rawText: string;
+    let sourceType: 'text' | 'txt' | 'pdf' = 'text';
+    let originalFilename: string | undefined;
+    let uploadMetadata: { name: string; mimeType: string; sizeBytes: number } | undefined;
+    let userMessageContent: string;
+
+    if (uploadedFile) {
+      if (Object.keys(req.body as Record<string, unknown>).length > 0) {
+        throw AppError.badRequest('INVALID_INPUT', 'A file upload must contain only the "file" field.');
+      }
+      const extracted = await extractUploadedFile(uploadedFile);
+      rawText = extracted.text;
+      sourceType = extracted.sourceType;
+      originalFilename = extracted.originalFilename;
+      uploadMetadata = { name: extracted.originalFilename, mimeType: extracted.mimeType, sizeBytes: extracted.sizeBytes };
+      userMessageContent = `Uploaded file: ${extracted.originalFilename}`;
+    } else {
+      if (req.is('multipart/form-data')) {
+        throw AppError.badRequest('INVALID_INPUT', 'Attach one TXT or PDF file using the "file" field.');
+      }
+      const body = req.body as { text?: unknown };
+      if (typeof body?.text !== 'string') {
+        throw AppError.badRequest('INVALID_INPUT', 'Field "text" is required and must be a string');
+      }
+      rawText = body.text;
+      userMessageContent = rawText;
+    }
+
+    if (rawText.trim().length < 30) {
+      throw AppError.badRequest('INVALID_INPUT', 'Meeting text is too short (minimum 30 characters required)');
+    }
+
+    if (rawText.length > env.MAX_TEXT_CHARS) {
+      throw AppError.payloadTooLarge(
+        'PAYLOAD_TOO_LARGE',
+        `Meeting text exceeds maximum length of ${env.MAX_TEXT_CHARS} characters`
+      );
+    }
+
+    const conversation = new Conversation({
+      clientId,
+      title: 'Generating minutes...',
+      sourceType,
+      originalFilename,
+      sourceText: rawText,
+      messageCount: 0,
+    });
+    await conversation.save();
+
+    const updatedForUser = await Conversation.findOneAndUpdate(
       { _id: conversation._id, clientId },
       { $inc: { messageCount: 1 } },
       { new: true }
     );
-    const errorSeq = updatedForError ? updatedForError.messageCount : userSeq + 1;
+    const userSeq = updatedForUser ? updatedForUser.messageCount : 1;
 
-    const friendlyContent =
-      llmError instanceof AppError
+    const userMessage = new Message({
+      conversationId: conversation._id,
+      seq: userSeq,
+      role: 'user',
+      content: userMessageContent,
+      messageType: 'text',
+      attachments: uploadMetadata ? [uploadMetadata] : [],
+    });
+    await userMessage.save();
+
+    let minutes: Minutes;
+    try {
+      minutes = await getLlmClient().generateMinutes(rawText);
+    } catch (llmError) {
+      const updatedForError = await Conversation.findOneAndUpdate(
+        { _id: conversation._id, clientId },
+        { $inc: { messageCount: 1 } },
+        { new: true }
+      );
+      const errorSeq = updatedForError ? updatedForError.messageCount : userSeq + 1;
+      const friendlyContent = llmError instanceof AppError
         ? llmError.message
         : 'Failed to generate meeting minutes. Please try again.';
+      await new Message({
+        conversationId: conversation._id,
+        seq: errorSeq,
+        role: 'assistant',
+        content: friendlyContent,
+        messageType: 'error',
+      }).save();
 
-    const errorMessage = new Message({
+      const mappedError = llmError instanceof AppError
+        ? new AppError(llmError.statusCode, llmError.code, llmError.message, conversation._id.toString())
+        : new AppError(502, 'LLM_UNAVAILABLE', 'Failed to generate meeting minutes. Please try again.', conversation._id.toString());
+      throw mappedError;
+    }
+
+    const updatedForAssistant = await Conversation.findOneAndUpdate(
+      { _id: conversation._id, clientId },
+      { $inc: { messageCount: 1 } },
+      { new: true }
+    );
+    const assistantSeq = updatedForAssistant ? updatedForAssistant.messageCount : userSeq + 1;
+    const assistantMessage = new Message({
       conversationId: conversation._id,
-      seq: errorSeq,
+      seq: assistantSeq,
       role: 'assistant',
-      content: friendlyContent,
-      messageType: 'error',
+      content: formatMinutesToMarkdown(minutes),
+      messageType: 'minutes',
+      structuredData: minutes,
+      attachments: [],
     });
-    await errorMessage.save();
+    await assistantMessage.save();
 
-    const mappedError = llmError instanceof AppError
-      ? new AppError(llmError.statusCode, llmError.code, llmError.message, conversation._id.toString())
-      : new AppError(502, 'LLM_UNAVAILABLE', 'Failed to generate meeting minutes. Please try again.', conversation._id.toString());
-    throw mappedError;
+    conversation.title = minutes.title || originalFilename || rawText.slice(0, 40);
+    await conversation.save();
+    responseBody = {
+      data: {
+        conversation: formatConversationDetail(conversation),
+        messages: [formatMessage(userMessage), formatMessage(assistantMessage)],
+      },
+    };
+  } finally {
+    if (uploadedFile) {
+      try {
+        await unlink(uploadedFile.path);
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      }
+    }
   }
 
-  // 4. Save assistant minutes message
-  const markdown = formatMinutesToMarkdown(minutes);
-
-  const updatedForAssistant = await Conversation.findOneAndUpdate(
-    { _id: conversation._id, clientId },
-    { $inc: { messageCount: 1 } },
-    { new: true }
-  );
-  const assistantSeq = updatedForAssistant ? updatedForAssistant.messageCount : userSeq + 1;
-
-  const assistantMessage = new Message({
-    conversationId: conversation._id,
-    seq: assistantSeq,
-    role: 'assistant',
-    content: markdown,
-    messageType: 'minutes',
-    structuredData: minutes,
-    attachments: [],
-  });
-  await assistantMessage.save();
-
-  // 5. Update conversation title from minutes.title, fallback to first 40 chars of source
-  conversation.title = minutes.title || rawText.slice(0, 40);
-  await conversation.save();
-
-  res.status(201).json({
-    data: {
-      conversation: formatConversationDetail(conversation),
-      messages: [formatMessage(userMessage), formatMessage(assistantMessage)],
-    },
-  });
+  res.status(201).json(responseBody!);
 }
 
 /**

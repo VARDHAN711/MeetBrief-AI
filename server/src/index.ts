@@ -1,8 +1,11 @@
 import mongoose from 'mongoose';
 import { app } from './app.js';
 import { env } from './config/env.js';
+import { cleanupStaleUploadFiles } from './middleware/upload.js';
 
 async function startServer(): Promise<void> {
+  await cleanupStaleUploadFiles();
+
   try {
     await mongoose.connect(env.MONGODB_URI);
     console.log('Connected to MongoDB');

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { Composer, MinutesCard } from './App';
-import type { ConversationDetail, ConversationSummary, MessageItem, Minutes } from './types/api';
+import type { ConversationDetail, ConversationSummary, CreateConversationResponse, MessageItem, Minutes } from './types/api';
 import { ApiRequestError, api } from './api/client';
 
 vi.mock('./api/client', async importOriginal => {
@@ -56,6 +56,40 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
     render(<Composer busy onSend={vi.fn()} />);
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Working…' })).toBeDisabled();
+  });
+
+  it('shows a selected-file chip with name and size and removes it on request', () => {
+    const file = new File(['TXT meeting notes for the next review.'], 'agenda.txt', { type: 'text/plain' });
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Attach a TXT or PDF file'), { target: { files: [file] } });
+    expect(screen.getByText('agenda.txt')).toBeInTheDocument();
+    expect(screen.getByText('1 KB')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attached file' }));
+    expect(screen.queryByText('agenda.txt')).not.toBeInTheDocument();
+  });
+
+  it('disables file attachment inside an existing conversation with the one-meeting tooltip', async () => {
+    vi.mocked(api.messages).mockResolvedValue(response([msg('m1', 1, 'user', 'Existing meeting source')]));
+    await mountWithList([summary]);
+    await userEvent.click((await screen.findAllByRole('button', { name: /Weekly review/ }))[0]);
+    const attach = screen.getByRole('button', { name: '＋' });
+    expect(attach).toBeDisabled();
+    expect(attach).toHaveAttribute('title', 'One meeting per chat. Start a New Chat to upload another');
+  });
+
+  it('shows upload, PDF extraction, and minutes generation stages in order', async () => {
+    let resolveCreate!: (value: CreateConversationResponse) => void;
+    const createPromise = new Promise<CreateConversationResponse>(resolve => { resolveCreate = resolve; });
+    vi.mocked(api.create).mockReturnValue(createPromise);
+    await mountWithList();
+    const file = new File(['PDF fixture'], 'agenda.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByLabelText('Attach a TXT or PDF file'), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Uploading...')).toBeInTheDocument();
+    expect(await screen.findByText('Extracting PDF text...')).toBeInTheDocument();
+    expect(await screen.findByText('Generating meeting minutes...')).toBeInTheDocument();
+    expect(api.create).toHaveBeenCalledWith(owner, file);
+    await act(async () => resolveCreate({ conversation: detail, messages: [msg('m1', 1, 'user', 'Uploaded file: agenda.pdf')] }));
   });
 
   it('failed first message restores stored messages, adds the chat to the sidebar, and shows Retry', async () => {
@@ -116,6 +150,18 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(expected);
     expect(alert).not.toHaveTextContent(rawServerText);
+  });
+
+  it.each([
+    ['UNSUPPORTED_FILE_TYPE', 'Choose a TXT or PDF file. Audio and other file types are not supported yet.'],
+    ['INVALID_FILE', 'That file is empty, corrupt, or not a valid TXT or PDF file.'],
+    ['NO_EXTRACTABLE_TEXT', 'This PDF seems to be scanned or image-only. This version needs a PDF with selectable text.'],
+  ])('shows a friendly message without Retry for upload error %s', async (code, expected) => {
+    vi.mocked(api.create).mockRejectedValue(new ApiRequestError({ code, message: rawServerText }));
+    await mountWithList();
+    await submit();
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('Retry replaces the error in place without duplicating it or losing earlier messages', async () => {

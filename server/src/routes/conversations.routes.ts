@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { clientIdMiddleware } from '../middleware/clientId.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { uploadSingleFile } from '../middleware/upload.js';
 import {
   listConversations,
   createConversation,
@@ -15,7 +16,7 @@ export const conversationsRouter = Router();
 conversationsRouter.use(clientIdMiddleware);
 
 conversationsRouter.get('/', asyncHandler(listConversations));
-conversationsRouter.post('/', asyncHandler(createConversation));
+conversationsRouter.post('/', uploadSingleFile, asyncHandler(createConversation));
 conversationsRouter.get('/:id/messages', asyncHandler(getConversationMessages));
 conversationsRouter.post('/:id/messages', asyncHandler(postConversationMessage));
 conversationsRouter.post('/:id/retry', asyncHandler(retryConversationMessage));

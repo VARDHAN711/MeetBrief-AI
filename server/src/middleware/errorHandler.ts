@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction, ErrorRequestHandler } from 'express';
 import mongoose from 'mongoose';
+import { MulterError } from 'multer';
 import { AppError } from '../utils/AppError.js';
 
 export const asyncHandler =
@@ -20,6 +21,23 @@ export const errorHandler: ErrorRequestHandler = (
         code: err.code,
         message: err.message,
         ...(err.conversationId ? { conversationId: err.conversationId } : {}),
+      },
+    });
+    return;
+  }
+
+  if (err instanceof MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'The uploaded file exceeds the maximum file size.' } });
+      return;
+    }
+
+    res.status(400).json({
+      error: {
+        code: 'INVALID_INPUT',
+        message: err.code === 'LIMIT_UNEXPECTED_FILE'
+          ? 'Upload one file using the "file" field.'
+          : 'The multipart upload is invalid.',
       },
     });
     return;
