@@ -11,10 +11,11 @@ export const asyncHandler =
 
 export const errorHandler: ErrorRequestHandler = (
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction
 ): void => {
+  if (req.aborted || res.destroyed || res.headersSent || isAbortedRequestError(err)) return;
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
       error: {
@@ -80,7 +81,9 @@ export const errorHandler: ErrorRequestHandler = (
   }
 
   // Unknown / unhandled error - sanitize and never leak internal details/stack traces
-  console.error('Unhandled server error:', err instanceof Error ? err.name : 'UnknownError');
+  const code = err instanceof AppError ? err.code : 'INTERNAL_SERVER_ERROR';
+  const conversationId = typeof req.params.id === 'string' ? req.params.id : 'none';
+  console.error(`ServerError conversationId=${conversationId} code=${code}`);
   res.status(500).json({
     error: {
       code: 'INTERNAL_SERVER_ERROR',
@@ -88,3 +91,10 @@ export const errorHandler: ErrorRequestHandler = (
     },
   });
 };
+
+function isAbortedRequestError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const candidate = err as { code?: unknown; name?: unknown; message?: unknown };
+  return candidate.code === 'ECONNABORTED' || candidate.code === 'ABORT_ERR' ||
+    candidate.name === 'AbortError' || candidate.message === 'request aborted';
+}

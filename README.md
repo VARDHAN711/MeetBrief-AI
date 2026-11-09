@@ -84,6 +84,10 @@ npm run dev
 ```
 The client will start on `http://localhost:5173` with proxy forwarding `/api` requests to `http://localhost:5000`.
 
+## Limitations
+
+PDF text extraction runs synchronously; a generated 300-page, text-heavy PDF (1,582,268 bytes and 1,396,439 extracted characters) took 577 ms and 553 ms across two local runs, delaying a zero-delay timer by 577 ms and 553 ms respectively.
+
 ## Testing and Verification
 
 ### Server Checks

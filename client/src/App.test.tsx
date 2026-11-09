@@ -7,7 +7,7 @@ import { ApiRequestError, api } from './api/client';
 
 vi.mock('./api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('./api/client')>();
-  return { ...actual, api: { ...actual.api, list: vi.fn(), messages: vi.fn(), create: vi.fn(), send: vi.fn(), retry: vi.fn(), remove: vi.fn() } };
+  return { ...actual, api: { ...actual.api, list: vi.fn(), messages: vi.fn(), create: vi.fn(), send: vi.fn(), retry: vi.fn(), remove: vi.fn(), export: vi.fn() } };
 });
 
 const owner = 'client-id-test';
@@ -50,6 +50,51 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
     expect(screen.getByText('Not specified')).toBeInTheDocument();
     expect(screen.getByText('<b>Ship</b>')).toBeInTheDocument();
     expect(container.querySelector('b')).toBeNull();
+  });
+
+  it('downloads minutes as a Blob and revokes the temporary object URL', async () => {
+    const minutesMessage: MessageItem = { ...msg('minutes-1', 2, 'assistant', 'stored markdown', 'minutes'), structuredData: minutes };
+    vi.mocked(api.messages).mockResolvedValue(response([msg('source', 1, 'user', 'A saved meeting source.'), minutesMessage]));
+    vi.mocked(api.export).mockResolvedValue({ blob: new Blob(['minutes'], { type: 'text/markdown' }), filename: 'Review.md' });
+    const createUrl = vi.fn().mockReturnValue('blob:download-test');
+    const revokeUrl = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    await mountWithList([summary]);
+    await userEvent.click((await screen.findAllByRole('button', { name: /Weekly review/ }))[0]);
+    await userEvent.click(await screen.findByText('Download'));
+    await userEvent.click(screen.getByRole('button', { name: 'Markdown' }));
+    await waitFor(() => expect(api.export).toHaveBeenCalledWith(owner, summary.id, 'md'));
+    expect(createUrl).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalled();
+    await waitFor(() => expect(revokeUrl).toHaveBeenCalledWith('blob:download-test'));
+    vi.unstubAllGlobals(); click.mockRestore();
+  });
+
+  it('shows a friendly export error without offering a retry button', async () => {
+    const minutesMessage: MessageItem = { ...msg('minutes-1', 2, 'assistant', 'stored markdown', 'minutes'), structuredData: minutes };
+    vi.mocked(api.messages).mockResolvedValue(response([msg('source', 1, 'user', 'A saved meeting source.'), minutesMessage]));
+    vi.mocked(api.export).mockRejectedValue(new ApiRequestError({ code: 'NO_MINUTES', message: 'raw no minutes response' }));
+    await mountWithList([summary]);
+    await userEvent.click((await screen.findAllByRole('button', { name: /Weekly review/ }))[0]);
+    await userEvent.click(await screen.findByText('Download'));
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Minutes are not available for download yet. Please try again after generation completes.');
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('shows a friendly not-found message and a network message for download failures', async () => {
+    const minutesMessage: MessageItem = { ...msg('minutes-1', 2, 'assistant', 'stored markdown', 'minutes'), structuredData: minutes };
+    vi.mocked(api.messages).mockResolvedValue(response([msg('source', 1, 'user', 'A saved meeting source.'), minutesMessage]));
+    vi.mocked(api.export).mockRejectedValueOnce(new ApiRequestError({ code: 'CONVERSATION_NOT_FOUND', message: 'raw 404 response' }));
+    await mountWithList([summary]);
+    await userEvent.click((await screen.findAllByRole('button', { name: /Weekly review/ }))[0]);
+    await userEvent.click(await screen.findByText('Download'));
+    await userEvent.click(screen.getByRole('button', { name: 'Markdown' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That conversation could not be found. Refresh the meeting list.');
+    vi.mocked(api.export).mockRejectedValueOnce(new TypeError('network failure'));
+    await userEvent.click(screen.getByRole('button', { name: 'Markdown' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong. Please try again.'));
   });
 
   it('Composer disables its input and send button while busy', () => {
@@ -158,6 +203,8 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
 
   it.each([
     ['RATE_LIMITED', 'The AI service is busy. Please wait a moment and try again.'],
+    ['TOO_MANY_REQUESTS', 'You are sending requests too quickly. Please wait a minute and try again.'],
+    ['NO_MINUTES', 'Minutes are not available for download yet. Please try again after generation completes.'],
     ['LLM_CONFIG_ERROR', 'The AI service is not configured. Please contact the administrator.'],
     ['LLM_UNAVAILABLE', 'The AI service is temporarily unavailable. Please try again.'],
     ['LLM_EMPTY', 'The AI could not produce a response. Please try again.'],

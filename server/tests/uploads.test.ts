@@ -287,7 +287,11 @@ describe('Phase 5 - TXT and PDF uploads', () => {
     expect(userMessage?.content).not.toContain(TRANSCRIPT);
     expect(userMessage?.attachments.map(item => ({ name: item.name, mimeType: item.mimeType, sizeBytes: item.sizeBytes })))
       .toEqual([{ name: filename, mimeType, sizeBytes: bytes.length }]);
-    expect(transcribe).toHaveBeenCalledWith(expect.any(String), filename.endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav');
+    expect(transcribe).toHaveBeenCalledWith(
+      expect.any(String),
+      filename.endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav',
+      [filename],
+    );
   });
 
   it('rejects an executable renamed to MP3 based on the audio magic bytes', async () => {

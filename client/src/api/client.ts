@@ -34,4 +34,19 @@ export const api = {
   send: (id: string, conversationId: string, content: string) => request<{ messages: MessageItem[] }>(`${API}/${conversationId}/messages`, id, { method: 'POST', body: JSON.stringify({ content }) }),
   retry: (id: string, conversationId: string) => request<RetryMessageResponse>(`${API}/${conversationId}/retry`, id, { method: 'POST' }),
   remove: (id: string, conversationId: string) => request<void>(`${API}/${conversationId}`, id, { method: 'DELETE' }),
+  export: async (id: string, conversationId: string, format: 'md' | 'txt'): Promise<{ blob: Blob; filename: string }> => {
+    const response = await fetch(`${API}/${conversationId}/export?format=${format}`, { headers: { 'x-client-id': id } });
+    if (!response.ok) {
+      let body: ApiError;
+      try { body = await response.json() as ApiError; }
+      catch { throw new Error('The download could not be completed. Please try again.'); }
+      throw new ApiRequestError(body.error);
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    const plain = /filename="([^"]+)"/i.exec(disposition)?.[1];
+    let filename = plain ?? `meeting-minutes.${format}`;
+    if (encoded) { try { filename = decodeURIComponent(encoded); } catch { filename = plain ?? filename; } }
+    return { blob: await response.blob(), filename };
+  },
 };

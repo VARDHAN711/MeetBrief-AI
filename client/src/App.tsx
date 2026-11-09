@@ -6,6 +6,8 @@ import './App.css';
 
 const friendly: Record<string, string> = {
   RATE_LIMITED: 'The AI service is busy. Please wait a moment and try again.',
+  TOO_MANY_REQUESTS: 'You are sending requests too quickly. Please wait a minute and try again.',
+  NO_MINUTES: 'Minutes are not available for download yet. Please try again after generation completes.',
   LLM_CONFIG_ERROR: 'The AI service is not configured. Please contact the administrator.',
   LLM_UNAVAILABLE: 'The AI service is temporarily unavailable. Please try again.',
   LLM_EMPTY: 'The AI could not produce a response. Please try again.',
@@ -27,9 +29,9 @@ const friendly: Record<string, string> = {
 const retryable = new Set(['RATE_LIMITED', 'LLM_UNAVAILABLE', 'LLM_EMPTY', 'LLM_BAD_OUTPUT', 'LLM_TIMEOUT']);
 const FILE_STAGE_PAUSE_MS = 120;
 
-export function MinutesCard({ minutes }: { minutes: Minutes }) {
+export function MinutesCard({ minutes, onDownload }: { minutes: Minutes; onDownload?: (format: 'md' | 'txt') => void }) {
   return <article className="minutes-card">
-    <h2>{minutes.title}</h2><section><h3>Summary</h3><p>{minutes.summary}</p></section>
+    <h2>{minutes.title}</h2>{onDownload && <details className="download-menu"><summary>Download</summary><button type="button" onClick={() => onDownload('md')}>Markdown</button><button type="button" onClick={() => onDownload('txt')}>Text</button></details>}<section><h3>Summary</h3><p>{minutes.summary}</p></section>
     <section><h3>Key decisions</h3>{minutes.decisions.length ? <ul>{minutes.decisions.map((d, i) => <li key={i}><strong>{d.decision}</strong>{d.context && <p>{d.context}</p>}</li>)}</ul> : <p>No confirmed decisions.</p>}</section>
     <section><h3>Action items</h3><div className="table-wrap"><table><thead><tr><th>Task</th><th>Assignee</th><th>Deadline</th></tr></thead><tbody>{minutes.actionItems.map((a, i) => <tr key={i}><td>{a.task}</td><td>{a.assignee || 'Unassigned'}</td><td>{a.deadline || 'Not specified'}</td></tr>)}</tbody></table></div></section>
     <section><h3>Suggestions <small>(not decided)</small></h3>{minutes.suggestions.length ? <ul>{minutes.suggestions.map((s, i) => <li key={i}>{s.text}</li>)}</ul> : <p>None noted.</p>}</section>
@@ -193,6 +195,15 @@ export default function App() {
     try { await api.remove(clientId, id); setConversations(m => m.filter(c => c.id !== id)); if (activeId === id) startNew(); }
     catch (e) { setBanner(errorText(e)); }
   };
+  const download = async (format: 'md' | 'txt', conversationId: string) => {
+    try {
+      const result = await api.export(clientId, conversationId, format);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = result.filename; anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) { setBanner(errorText(error)); }
+  };
   return <div className="shell">
     <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
       <div className="brand"><span className="brand-mark">M</span><span>MeetBrief <small>AI</small></span></div>
@@ -208,7 +219,7 @@ export default function App() {
     <main className="main-panel">
       <header className="topbar"><button className="menu-toggle" aria-label="Open menu" onClick={() => setMobileOpen(true)}>☰</button><div><strong>{active?.title || (activeId ? 'Meeting' : 'New conversation')}</strong><span>{active ? 'Meeting workspace' : 'AI meeting assistant'}</span></div><span className="topbar-status"><i /> Ready</span></header>
       <div className="message-area" ref={scrollRef}>
-        {!activeId && messages.length === 0 ? <div className="welcome"><div className="welcome-orb">✳</div><p className="eyebrow">MEETBRIEF AI</p><h1>Make every meeting<br /><em>clear and actionable.</em></h1><p className="welcome-copy">Turn conversations into decisions, action items, and answers you can come back to.</p><div className="welcome-options"><div><b>◉</b><span><strong>Upload a recording</strong><small>Audio transcription</small></span></div><div><b>▤</b><span><strong>Upload a transcript or PDF</strong><small>Bring your meeting notes</small></span></div><div><b>✎</b><span><strong>Paste meeting notes</strong><small>Start with text below</small></span></div></div></div> : <div className="messages">{messages.map(m => <div className={`message-row ${m.role}`} key={m.id}><div className="avatar">{m.role === 'user' ? 'You' : 'M'}</div><div className="message-body">{m.messageType === 'minutes' && m.structuredData ? <MinutesCard minutes={m.structuredData} /> : m.messageType === 'error' ? <ErrorMessage message={m} onRetry={m.id === messages.at(-1)?.id && retryAllowed ? retry : undefined} retrying={busy} /> : <div className="bubble">{m.content}</div>}</div></div>)}{stage && <div className="stage"><span className="spinner" />{stage}</div>}</div>}
+        {!activeId && messages.length === 0 ? <div className="welcome"><div className="welcome-orb">✳</div><p className="eyebrow">MEETBRIEF AI</p><h1>Make every meeting<br /><em>clear and actionable.</em></h1><p className="welcome-copy">Turn conversations into decisions, action items, and answers you can come back to.</p><div className="welcome-options"><div><b>◉</b><span><strong>Upload a recording</strong><small>Audio transcription</small></span></div><div><b>▤</b><span><strong>Upload a transcript or PDF</strong><small>Bring your meeting notes</small></span></div><div><b>✎</b><span><strong>Paste meeting notes</strong><small>Start with text below</small></span></div></div></div> : <div className="messages">{messages.map(m => <div className={`message-row ${m.role}`} key={m.id}><div className="avatar">{m.role === 'user' ? 'You' : 'M'}</div><div className="message-body">{m.messageType === 'minutes' && m.structuredData ? <MinutesCard minutes={m.structuredData} onDownload={format => void download(format, m.conversationId)} /> : m.messageType === 'error' ? <ErrorMessage message={m} onRetry={m.id === messages.at(-1)?.id && retryAllowed ? retry : undefined} retrying={busy} /> : <div className="bubble">{m.content}</div>}</div></div>)}{stage && <div className="stage"><span className="spinner" />{stage}</div>}</div>}
       </div>
       {banner && <div role="alert" className="banner"><span>{banner}</span><button onClick={() => setBanner('')} aria-label="Dismiss error">×</button></div>}
       <Composer busy={busy} onSend={send} allowUpload={!activeId} selectedFile={selectedFile} onFileChange={setSelectedFile} />

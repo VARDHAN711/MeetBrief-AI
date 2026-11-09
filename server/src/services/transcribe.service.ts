@@ -4,7 +4,7 @@ import type { GenerateContentResponse } from '@google/genai';
 import { env } from '../config/env.js';
 import { AppError } from '../utils/AppError.js';
 import { sanitizeFilename } from '../utils/sanitizeFilename.js';
-import { formatGeminiFailureLog, mapGeminiError } from './gemini.llm.service.js';
+import { logGeminiFailure, mapGeminiError } from './gemini.llm.service.js';
 
 export interface TranscriptionResult {
   text: string;
@@ -13,7 +13,7 @@ export interface TranscriptionResult {
 }
 
 export interface TranscriberClient {
-  transcribe(filePath: string, mimeType: string): Promise<TranscriptionResult>;
+  transcribe(filePath: string, mimeType: string, protectedValues?: readonly string[]): Promise<TranscriptionResult>;
 }
 
 export interface RemoteAudioFile {
@@ -36,7 +36,7 @@ export interface GeminiAudioGateway {
 
 const MAX_OUTPUT_TOKENS = 65_536;
 const FILE_POLL_INTERVAL_MS = 1_000;
-const TRANSCRIPTION_PROMPT = `Produce a verbatim transcript only, in the language spoken. Do not summarize, add commentary, or invent words. Mark unclear audio as [inaudible]. If distinct voices are clear, you may label them Speaker 1, Speaker 2, and so on, but never guess real names.`;
+export const TRANSCRIPTION_PROMPT = `Produce a verbatim transcript only, in the language spoken. Do not summarize, add commentary, or invent words. Mark unclear audio as [inaudible]. If distinct voices are clear, you may label them Speaker 1, Speaker 2, and so on, but never guess real names.`;
 
 export class GoogleGeminiAudioGateway implements GeminiAudioGateway {
   constructor(private readonly ai: GoogleGenAI) {}
@@ -139,12 +139,13 @@ export class GeminiTranscriber implements TranscriberClient {
   constructor(
     private readonly model: string,
     private readonly timeoutMs: number,
-    gateway?: GeminiAudioGateway
+    gateway?: GeminiAudioGateway,
+    private readonly logErrorDetails: boolean = env.GEMINI_LOG_ERROR_DETAILS === 'true',
   ) {
     this.gateway = gateway ?? new GoogleGeminiAudioGateway(new GoogleGenAI({ apiKey: env.GEMINI_API_KEY ?? '' }));
   }
 
-  async transcribe(filePath: string, mimeType: string): Promise<TranscriptionResult> {
+  async transcribe(filePath: string, mimeType: string, protectedValues: readonly string[] = []): Promise<TranscriptionResult> {
     const started = Date.now();
     const controller = new AbortController();
     let remoteFile: RemoteAudioFile | undefined;
@@ -202,15 +203,14 @@ export class GeminiTranscriber implements TranscriberClient {
       return await Promise.race([operation, timeout]);
     } catch (error) {
       if (!(error instanceof AppError)) {
-        const className = error instanceof Error ? error.name : 'UnknownError';
-        console.error(formatGeminiFailureLog({
-          className,
-          httpStatus: requestStatus(error),
-          googleStatus: undefined,
-          message: 'audio transcription request failed',
-          elapsedMs: Date.now() - started,
-          model: this.model,
-        }));
+        logGeminiFailure(
+          error,
+          Date.now() - started,
+          this.model,
+          [env.GEMINI_API_KEY ?? '', filePath, mimeType, TRANSCRIPTION_PROMPT, ...protectedValues],
+          this.logErrorDetails,
+          'TranscriptionFailure',
+        );
       }
       throw mapGeminiError(error);
     } finally {
@@ -286,7 +286,7 @@ export async function transcribeUploadedAudio(file: Express.Multer.File): Promis
   const canonicalMime = extension === '.mp3' ? 'audio/mpeg' : 'audio/wav';
   let result: TranscriptionResult;
   try {
-    result = await getTranscriberClient().transcribe(file.path, canonicalMime);
+    result = await getTranscriberClient().transcribe(file.path, canonicalMime, [file.originalname]);
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw mapGeminiError(error);

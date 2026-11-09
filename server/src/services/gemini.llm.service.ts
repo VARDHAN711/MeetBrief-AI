@@ -21,6 +21,7 @@
  * Live doc fetch was not used; signatures are from this installed SDK.
  */
 import { GoogleGenAI, type Content, type ContentListUnion } from '@google/genai';
+import { env } from '../config/env.js';
 import { MinutesSchema, type Minutes } from '../schemas/minutes.schema.js';
 import { AppError } from '../utils/AppError.js';
 import { MINUTES_SYSTEM_INSTRUCTION, buildMinutesUserMessage } from '../prompts/minutes.js';
@@ -97,14 +98,6 @@ const MINUTES_RESPONSE_JSON_SCHEMA = {
   required: ['title', 'summary', 'decisions', 'actionItems', 'suggestions', 'pendingIssues', 'limitations'],
 };
 
-function errorClassName(err: unknown): string {
-  if (typeof err === 'object' && err !== null && 'name' in err && typeof err.name === 'string' && err.name) {
-    return err.name;
-  }
-  if (err instanceof Error) return err.name || 'Error';
-  return 'UnknownError';
-}
-
 function extractHttpStatus(err: unknown): number | undefined {
   if (typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status: unknown }).status === 'number') {
     return (err as { status: number }).status;
@@ -120,63 +113,101 @@ function extractErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function extractGoogleStatus(err: unknown, message: string): string | undefined {
-  if (typeof err === 'object' && err !== null) {
-    const nested = (err as { error?: { status?: unknown } }).error;
-    if (nested && typeof nested.status === 'string' && nested.status) {
-      return nested.status;
-    }
-  }
-  try {
-    const parsed: unknown = JSON.parse(message);
-    if (typeof parsed === 'object' && parsed !== null) {
-      const status = (parsed as { error?: { status?: unknown } }).error?.status;
-      if (typeof status === 'string' && status) return status;
-    }
-  } catch {
-    // message is not JSON
-  }
-  const match = /got status:\s*([A-Z_]+)/.exec(message);
-  return match?.[1];
-}
-
-function redactSecrets(text: string): string {
-  return text
-    .replace(/AIza[0-9A-Za-z_-]+/g, '[redacted]')
-    .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[^"'&\s]+/gi, '$1[redacted]');
-}
-
-/** Single-line Gemini failure log. Never includes the API key, request body, prompt, or meeting text. */
-export function formatGeminiFailureLog(details: {
-  className: string;
+export interface GoogleErrorDetails {
   httpStatus: number | undefined;
   googleStatus: string | undefined;
-  message: string;
-  elapsedMs: number;
-  model: string;
-}): string {
-  const message = redactSecrets(details.message).slice(0, 300);
-  return [
-    'GeminiFailure',
-    `class=${details.className}`,
-    `httpStatus=${details.httpStatus ?? 'n/a'}`,
-    `googleStatus=${details.googleStatus ?? 'n/a'}`,
-    `message=${message}`,
-    `elapsedMs=${details.elapsedMs}`,
-    `model=${details.model}`,
-  ].join(' ');
+  message: string | undefined;
 }
 
-export function logGeminiFailure(err: unknown, elapsedMs: number, model: string): string {
-  const message = extractErrorMessage(err);
-  const line = formatGeminiFailureLog({
-    className: errorClassName(err),
-    httpStatus: extractHttpStatus(err),
-    googleStatus: extractGoogleStatus(err, message),
-    message,
-    elapsedMs,
-    model,
-  });
+function redactProviderMessage(rawMessage: string, protectedValues: readonly string[]): string {
+  let message = rawMessage.slice(0, 200);
+  const redacted = new Uint8Array(message.length);
+  for (const value of [...new Set(protectedValues)].filter(Boolean)) {
+    if (value.length <= 200) {
+      let from = 0;
+      while (from < message.length) {
+        const index = message.indexOf(value, from);
+        if (index < 0) break;
+        redacted.fill(1, index, index + value.length);
+        from = index + value.length;
+      }
+      continue;
+    }
+    const fragmentLength = 16;
+    for (let index = 0; index <= message.length - fragmentLength; index++) {
+      if (value.includes(message.slice(index, index + fragmentLength))) {
+        redacted.fill(1, index, index + fragmentLength);
+      }
+    }
+  }
+  let safeMessage = '';
+  for (let index = 0; index < message.length;) {
+    if (redacted[index]) {
+      safeMessage += '[redacted]';
+      while (redacted[index]) index++;
+    } else {
+      safeMessage += message[index];
+      index++;
+    }
+  }
+  return safeMessage;
+}
+
+export function extractGoogleErrorDetails(err: unknown): GoogleErrorDetails {
+  const httpStatus = extractHttpStatus(err);
+  let providerError: Record<string, unknown> | undefined;
+  if (typeof err === 'object' && err !== null && 'error' in err) {
+    const nested = (err as { error?: unknown }).error;
+    if (typeof nested === 'object' && nested !== null) providerError = nested as Record<string, unknown>;
+  }
+  const rawMessage = extractErrorMessage(err);
+  try {
+    const parsed: unknown = JSON.parse(rawMessage);
+    if (typeof parsed === 'object' && parsed !== null && 'error' in parsed) {
+      const nested = (parsed as { error?: unknown }).error;
+      if (typeof nested === 'object' && nested !== null) providerError = nested as Record<string, unknown>;
+    }
+  } catch {
+    // A non-JSON SDK message is retained only when explicit details logging is enabled.
+  }
+  const status = providerError?.status;
+  const message = providerError?.message;
+  return {
+    httpStatus,
+    googleStatus: typeof status === 'string' ? status : undefined,
+    message: typeof message === 'string' ? message : (httpStatus !== undefined ? rawMessage : undefined),
+  };
+}
+
+export function formatGeminiFailureLog(
+  code: string,
+  details: GoogleErrorDetails,
+  includeMessage = false,
+  protectedValues: readonly string[] = [],
+  label = 'GeminiFailure',
+): string {
+  const fields = [
+    `${label} code=${code}`,
+    `httpStatus=${details.httpStatus ?? 'n/a'}`,
+    `googleStatus=${details.googleStatus ?? 'n/a'}`,
+  ];
+  if (includeMessage && details.message) {
+    let message = redactProviderMessage(details.message, protectedValues);
+    message = message.replace(/\b(authorization|x-goog-api-key)\s*[:=]\s*[^,\s;]+/gi, '$1: [redacted]');
+    fields.push(`message=${JSON.stringify(message)}`);
+  }
+  return fields.join(' ');
+}
+
+export function logGeminiFailure(
+  err: unknown,
+  _elapsedMs: number,
+  _model: string,
+  protectedValues: readonly string[] = [],
+  includeMessage = env.GEMINI_LOG_ERROR_DETAILS === 'true',
+  label = 'GeminiFailure',
+): string {
+  const line = formatGeminiFailureLog(mapGeminiError(err).code, extractGoogleErrorDetails(err), includeMessage, protectedValues, label);
   console.error(line);
   return line;
 }
@@ -315,8 +346,13 @@ export class GeminiLlmClient implements LlmClient {
   private readonly model: string;
   private readonly timeoutMs: number;
 
-  constructor(apiKey: string, model: string, timeoutMs: number = DEFAULT_GEMINI_TIMEOUT_MS) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(
+    private readonly apiKey: string,
+    model: string,
+    timeoutMs: number = DEFAULT_GEMINI_TIMEOUT_MS,
+    private readonly logErrorDetails: boolean = env.GEMINI_LOG_ERROR_DETAILS === 'true',
+  ) {
+    this.ai = new GoogleGenAI({ apiKey: this.apiKey });
     this.model = model;
     this.timeoutMs = timeoutMs;
   }
@@ -337,7 +373,7 @@ export class GeminiLlmClient implements LlmClient {
     const userMessage = buildMinutesUserMessage(text);
 
     const rawJson = await this.withRateLimitRetry(() =>
-      this.callGeminiTimed(() => this._callGemini(userMessage))
+      this.callGeminiTimed(() => this._callGemini(userMessage), [MINUTES_SYSTEM_INSTRUCTION, text, userMessage])
     );
 
     const firstResult = parseAndValidate(rawJson);
@@ -349,7 +385,7 @@ export class GeminiLlmClient implements LlmClient {
 
     let repairJson: string;
     try {
-      repairJson = await this.callGeminiTimed(() => this._callGemini(repairMessage));
+      repairJson = await this.callGeminiTimed(() => this._callGemini(repairMessage), [MINUTES_SYSTEM_INSTRUCTION, text, userMessage, repairMessage]);
     } catch (repairErr) {
       throw this.fail(repairErr);
     }
@@ -375,7 +411,9 @@ export class GeminiLlmClient implements LlmClient {
    */
   async answerQuestion(sourceText: string, history: FollowupTurn[], question: string): Promise<string> {
     const systemInstruction = buildFollowupSystemInstruction(sourceText);
-    const contents = toGeminiContents(limitFollowupHistory(history), question);
+    const limitedHistory = limitFollowupHistory(history);
+    const contents = toGeminiContents(limitedHistory, question);
+    const protectedValues = [systemInstruction, sourceText, question, ...limitedHistory.map(turn => turn.content)];
 
     return this.withRateLimitRetry(() =>
       this.callGeminiTimed(() =>
@@ -383,7 +421,8 @@ export class GeminiLlmClient implements LlmClient {
           systemInstruction,
           contents,
           responseMimeType: 'text/plain',
-        })
+        }),
+        protectedValues,
       )
     );
   }
@@ -421,13 +460,13 @@ export class GeminiLlmClient implements LlmClient {
    * Logs exactly one diagnostic line on API/network/timeout failure,
    * then rethrows the original error (AppError for empty/safety is not logged).
    */
-  private async callGeminiTimed(run: () => Promise<string>): Promise<string> {
+  private async callGeminiTimed(run: () => Promise<string>, protectedValues: readonly string[] = []): Promise<string> {
     const started = Date.now();
     try {
       return await run();
     } catch (err) {
       if (!(err instanceof AppError)) {
-        logGeminiFailure(err, Date.now() - started, this.model);
+        logGeminiFailure(err, Date.now() - started, this.model, [this.apiKey, ...protectedValues], this.logErrorDetails);
       }
       throw err;
     }

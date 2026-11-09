@@ -3,6 +3,7 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   GeminiTranscriber,
   GoogleGeminiAudioGateway,
+  TRANSCRIPTION_PROMPT,
   type GeminiAudioGateway,
   type RemoteAudioFile,
   type TranscriptionResult,
@@ -102,6 +103,29 @@ describe('Gemini audio transcription configuration and Files API polling', () =>
     expect(gateway.get).toHaveBeenCalledTimes(2);
     expect(gateway.generate).not.toHaveBeenCalled();
     expect(gateway.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs transcription status and optional redacted details without prompt or filename', async () => {
+    const filePath = 'CANARY_FILE_NAME_recording.mp3';
+    const providerMessage = `Request failed: ${filePath}; ${TRANSCRIPTION_PROMPT}`;
+    const gateway = makeGateway({
+      generate: vi.fn().mockRejectedValue({
+        name: 'ApiError', status: 400,
+        message: JSON.stringify({ error: { code: 400, status: 'INVALID_ARGUMENT', message: providerMessage } }),
+      }),
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(new GeminiTranscriber(env.GEMINI_MODEL, 60_000, gateway, true).transcribe(filePath, 'audio/mpeg'))
+      .rejects.toMatchObject({ code: 'LLM_CONFIG_ERROR' });
+
+    const line = String(log.mock.calls[0]?.[0]);
+    expect(line).toContain('TranscriptionFailure code=LLM_CONFIG_ERROR httpStatus=400 googleStatus=INVALID_ARGUMENT');
+    expect(line).toContain('Request failed: [redacted]');
+    expect(line).not.toContain(filePath);
+    expect(line).not.toContain(TRANSCRIPTION_PROMPT);
+    expect(line).not.toContain('dummy-api-key');
+    log.mockRestore();
   });
 
   it('does not continue transcription when a Files API poll resolves after the timeout', async () => {

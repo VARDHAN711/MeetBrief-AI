@@ -49,16 +49,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`Sending sample meeting to Gemini model: ${model} (timeout ${timeoutMs}ms)\n`);
-
   const client = new GeminiLlmClient(apiKey, model, timeoutMs);
   const minutes = await client.generateMinutes(SAMPLE_MEETING);
-  const markdown = formatMinutesToMarkdown(minutes);
-
-  console.log('=== Formatted Minutes ===\n');
-  console.log(markdown);
-  console.log('\n=== Raw Structured Data ===\n');
-  console.log(JSON.stringify(minutes, null, 2));
+  console.log(formatMinutesToMarkdown(minutes));
 }
 
 main().catch((err: unknown) => {

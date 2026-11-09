@@ -59,3 +59,18 @@ export function formatMinutesToMarkdown(minutes: Minutes): string {
   return sections.join('\n').trim();
 }
 
+export function formatMinutesToText(minutes: Minutes): string {
+  const lines = [minutes.title, '', 'Summary', minutes.summary];
+  if (minutes.decisions.length) {
+    lines.push('', 'Key Decisions', ...minutes.decisions.map(d => d.context ? `- ${d.decision} — ${d.context}` : `- ${d.decision}`));
+  }
+  if (minutes.actionItems.length) {
+    lines.push('', 'Action Items');
+    for (const item of minutes.actionItems) lines.push(`Task: ${item.task}`, `Assignee: ${item.assignee || 'Unassigned'}`, `Deadline: ${item.deadline || 'Not specified'}`, '');
+  }
+  if (minutes.suggestions.length) lines.push('', 'Suggestions', ...minutes.suggestions.map(item => `- ${item.text}`));
+  if (minutes.pendingIssues.length) lines.push('', 'Pending Issues', ...minutes.pendingIssues.map(item => `- ${item.kind.replace(/_/g, ' ')}: ${item.issue}`));
+  if (minutes.limitations.length) lines.push('', 'Notes and Limitations', ...minutes.limitations.map(item => `- ${item}`));
+  return lines.join('\n').trim();
+}
+

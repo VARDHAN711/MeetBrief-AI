@@ -3,13 +3,14 @@ import { z } from 'zod';
 
 dotenv.config();
 
-const envSchema = z.object({
+export const envSchema = z.object({
   PORT: z.coerce.number().default(5000),
   MONGODB_URI: z.string({
     required_error: 'MONGODB_URI is required',
     invalid_type_error: 'MONGODB_URI must be a string',
   }).min(1, 'MONGODB_URI is required'),
   GEMINI_API_KEY: z.string().optional(),
+  GEMINI_LOG_ERROR_DETAILS: z.enum(['true', 'false']).optional().default('false'),
   GEMINI_MODEL: z.string({
     required_error: 'GEMINI_MODEL is required',
     invalid_type_error: 'GEMINI_MODEL must be a string',

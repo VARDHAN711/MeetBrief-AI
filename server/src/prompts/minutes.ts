@@ -19,6 +19,7 @@ Respond ONLY with a valid JSON object matching the required schema. Do not add m
  * Wraps the given source text in <meeting_source> tags for the user message.
  */
 export function buildMinutesUserMessage(sourceText: string): string {
-  return `<meeting_source>\n${sourceText}\n</meeting_source>`;
+  const neutralized = sourceText.replace(/<\/?meeting_source/gi, match => match.startsWith('</') ? '< /meeting_source' : '< meeting_source');
+  return `<meeting_source>\n${neutralized}\n</meeting_source>`;
 }
 
