@@ -47,3 +47,6 @@ Desktop.ini
 # Local scratch
 tmp/
 *.local
+
+# Ignore model listing script
+list_google_models.js
