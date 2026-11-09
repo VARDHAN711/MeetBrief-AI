@@ -8,9 +8,10 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ../eval/tsconfig.json",
     "test": "vitest run",
-    "smoke:llm": "tsx src/scripts/smoke-llm.ts"
+    "smoke:llm": "tsx src/scripts/smoke-llm.ts",
+    "eval": "tsx ../eval/run.ts"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",

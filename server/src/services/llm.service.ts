@@ -1,6 +1,7 @@
 import type { Minutes } from '../schemas/minutes.schema.js';
 import type { FollowupTurn } from '../prompts/followup.js';
 import { env } from '../config/env.js';
+import { GEMINI_API_KEY_REQUIRED_MESSAGE } from '../config/geminiApiKey.js';
 import { GeminiLlmClient } from './gemini.llm.service.js';
 
 export interface LlmClient {
@@ -62,9 +63,13 @@ export class StubLlmClient implements LlmClient {
   }
 }
 
-let activeLlmClient: LlmClient = env.GEMINI_API_KEY
-  ? new GeminiLlmClient(env.GEMINI_API_KEY, env.GEMINI_MODEL, env.GEMINI_TIMEOUT_MS)
-  : new StubLlmClient();
+function createInitialLlmClient(): LlmClient {
+  if (env.GEMINI_API_KEY) return new GeminiLlmClient(env.GEMINI_API_KEY, env.GEMINI_MODEL, env.GEMINI_TIMEOUT_MS);
+  if (process.env.NODE_ENV === 'test') return new StubLlmClient();
+  throw new Error(GEMINI_API_KEY_REQUIRED_MESSAGE);
+}
+
+let activeLlmClient: LlmClient = createInitialLlmClient();
 
 export function getLlmClient(): LlmClient {
   return activeLlmClient;

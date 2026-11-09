@@ -1,0 +1,4 @@
+- Team agreed to archive the old dashboard.
+- Prepare a migration checklist; owner not recorded.
+- Discuss whether to notify customers at the next meeting.
+- No dates were captured.

@@ -6,22 +6,64 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../src/app.js';
-import { env, envSchema } from '../src/config/env.js';
+import { env, envSchema, formatEnvironmentIssues } from '../src/config/env.js';
+import { GEMINI_API_KEY_REQUIRED_MESSAGE, requireGeminiApiKey } from '../src/config/geminiApiKey.js';
 import { RATE_LIMITS } from '../src/config/rateLimits.js';
 import { responseTimeout } from '../src/middleware/responseTimeout.js';
 import { resetRateLimitStores } from '../src/middleware/rateLimit.js';
 import { errorHandler } from '../src/middleware/errorHandler.js';
 import { uploadDirectory } from '../src/middleware/upload.js';
+import * as llmService from '../src/services/llm.service.js';
 
 afterEach(() => {
   app.locals.rateLimitsEnabled = false;
   resetRateLimitStores();
+  vi.unstubAllEnvs();
 });
 
 describe('Phase 7 HTTP hardening', () => {
   it('defaults detailed Gemini error logging to false', () => {
     const parsed = envSchema.parse({ MONGODB_URI: 'mongodb://localhost/test', GEMINI_MODEL: 'test-model' });
     expect(parsed.GEMINI_LOG_ERROR_DETAILS).toBe('false');
+  });
+
+  it('requires a non-empty Gemini key outside tests and formats a value-free startup diagnostic', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const base = { MONGODB_URI: 'mongodb://localhost/test', GEMINI_MODEL: 'test-model' };
+    for (const apiKey of [undefined, '']) {
+      const parsed = envSchema.safeParse({ ...base, ...(apiKey === undefined ? {} : { GEMINI_API_KEY: apiKey }) });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        const keyIssue = parsed.error.issues.find((issue) => issue.path.join('.') === 'GEMINI_API_KEY');
+        expect(keyIssue?.message).toBe(GEMINI_API_KEY_REQUIRED_MESSAGE);
+      }
+    }
+    expect(() => requireGeminiApiKey(undefined)).toThrow(GEMINI_API_KEY_REQUIRED_MESSAGE);
+    expect(() => requireGeminiApiKey('   ')).toThrow(GEMINI_API_KEY_REQUIRED_MESSAGE);
+
+    const keyCanary = 'KEY_VALUE_MUST_NEVER_APPEAR_IN_CONFIG_DIAGNOSTIC';
+    const otherFailure = envSchema.safeParse({ GEMINI_API_KEY: keyCanary, MONGODB_URI: '', GEMINI_MODEL: 'test-model' });
+    expect(otherFailure.success).toBe(false);
+    if (!otherFailure.success) {
+      const diagnostic = formatEnvironmentIssues(otherFailure.error.issues).join('\n');
+      expect(diagnostic).toContain('MONGODB_URI');
+      expect(diagnostic).not.toContain(keyCanary);
+    }
+  });
+
+  it('allows keyless tests and keeps an explicitly set mock LLM client active', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    const parsed = envSchema.parse({ MONGODB_URI: 'mongodb://localhost/test', GEMINI_MODEL: 'test-model' });
+    expect(parsed.GEMINI_API_KEY).toBeUndefined();
+
+    const previous = llmService.getLlmClient();
+    const mockClient: llmService.LlmClient = {
+      generateMinutes: vi.fn().mockResolvedValue(llmService.STUB_MINUTES),
+      answerQuestion: vi.fn().mockResolvedValue('mock answer'),
+    };
+    llmService.setLlmClient(mockClient);
+    expect(llmService.getLlmClient()).toBe(mockClient);
+    llmService.setLlmClient(previous);
   });
 
   it('keeps rate limiting disabled in tests unless explicitly enabled', async () => {

@@ -1,113 +1,50 @@
 # MeetBrief AI
 
-MeetBrief AI is an intelligent meeting minutes and follow-up Q&A assistant built with React, Vite, Express, TypeScript, and MongoDB.
+MeetBrief turns a meeting transcript or supported upload into structured minutes and grounded follow-up answers. It uses React/Vite, Express, TypeScript, MongoDB, and Gemini.
 
-## Prerequisites
+## Requirements and setup
 
-- **Node.js**: >= 26.0.0
-- **MongoDB**: Community Server running locally on default port `27017`
-- **npm**: >= 10.0.0
+- Node.js 26 or newer and npm.
+- A MongoDB instance for local app use.
+- A Gemini API key for real model calls. Never commit or display it.
 
-## Repository Structure
+Install each app's dependencies with `npm install` from `server/` and `client/`. Copy `server/.env.example` to `server/.env` and fill in values locally.
 
-```
-meetbrief-ai/
-├── docs/                # Architecture, API specifications, and prompts
-├── server/              # Express + TypeScript backend (ESM, strict)
-│   ├── src/             # Application source code
-│   │   ├── config/      # Environment variable validation with zod
-│   │   ├── app.ts       # Express app configuration, middleware, routes
-│   │   └── index.ts     # MongoDB connection and server startup
-│   ├── tests/           # Integration and unit tests (vitest, supertest)
-│   ├── .env.example     # Template for server environment variables
-│   └── tsconfig.json    # TypeScript compiler configuration
-├── client/              # React + TypeScript frontend (Vite)
-│   ├── src/             # React application source code
-│   ├── vite.config.ts   # Vite configuration with /api dev proxy
-│   └── tsconfig.json    # TypeScript configuration
-└── .gitignore           # Git ignore rules for node_modules, .env, dist, uploads
-```
+## Environment variables
 
-## Setup Instructions
+`MONGODB_URI`, `GEMINI_MODEL`, and `GEMINI_API_KEY` are required for normal runtime. The stub LLM is available only when `NODE_ENV=test`; tests may also inject a mock with `setLlmClient`. Set `CLIENT_ORIGIN` to the client origin.
 
-### 1. Configure Server Environment
+| Variable | Purpose / default |
+|---|---|
+| `PORT` | API port, default `5000` |
+| `MONGODB_URI` | MongoDB connection string; required |
+| `GEMINI_API_KEY` | Required for normal runtime; stub/mock clients are test-only |
+| `GEMINI_MODEL` | Gemini model name; required |
+| `GEMINI_LOG_ERROR_DETAILS` | `false` by default; keep false in shared/demo environments |
+| `GEMINI_TIMEOUT_MS` | Gemini minutes/follow-up timeout, default `60000` |
+| `GEMINI_TRANSCRIBE_TIMEOUT_MS` | Audio workflow timeout, default `300000` |
+| `CLIENT_ORIGIN` | Allowed browser origin, default `http://localhost:5173` |
+| `MAX_TEXT_CHARS` | Text input cap, default `200000`; longer input is rejected, not chunked |
+| `MAX_AUDIO_MB` | Audio upload cap, default `25` |
+| `MAX_DOC_MB` | Document upload cap, default `10` |
 
-Copy the example environment file in `server/`:
+## Run locally
 
-```bash
-cd server
-cp .env.example .env
-```
+In separate terminals, run `npm run dev` from `server/` and `npm run dev` from `client/`. The server connects to MongoDB; the Vite dev server proxies API requests.
 
-Populate `.env` with your settings (never commit `.env`):
+## Scripts
 
-```ini
-PORT=5000
-MONGODB_URI=mongodb://127.0.0.1:27017/meetbrief
-GEMINI_API_KEY=<your_api_key>
-GEMINI_MODEL=gemini-2.5-flash
-CLIENT_ORIGIN=http://localhost:5173
-MAX_TEXT_CHARS=200000
-MAX_AUDIO_MB=25
-MAX_DOC_MB=10
-```
+From `server/`: `npm run dev`, `npm run build`, `npm test`, `npm run typecheck`, `npm run smoke:llm`, `npm run eval -- --help`.
 
-### 2. Install Dependencies
+From `client/`: `npm run dev`, `npm run build`, `npm test`, `npm run typecheck`, `npm run preview`.
 
-Install server dependencies:
-```bash
-cd server
-npm install
-```
-
-Install client dependencies:
-```bash
-cd client
-npm install
-```
-
-## Running the Application
-
-### Start Backend Development Server
-
-```bash
-cd server
-npm run dev
-```
-The server will connect to MongoDB and listen on `http://localhost:5000`.
-
-### Start Frontend Development Server
-
-```bash
-cd client
-npm run dev
-```
-The client will start on `http://localhost:5173` with proxy forwarding `/api` requests to `http://localhost:5000`.
+The smoke command calls Gemini and should be used only when deliberately spending quota. The evaluation runner supports `--only`, `--runs`, `--questions`, `--delay-ms`, `--force`, `--yes`, and `--dry-run`; see `eval/RESULTS_FORMAT.md`. Dry-run prints the plan and pacing estimate without loading API configuration. Review and correct all DRAFT expected files before running a real evaluation. The runner saves under ignored `eval/results/`, resumes by model, and stops on quota/rate-limit/overload/timeout.
 
 ## Limitations
 
-PDF text extraction runs synchronously; a generated 300-page, text-heavy PDF (1,582,268 bytes and 1,396,439 extracted characters) took 577 ms and 553 ms across two local runs, delaying a zero-delay timer by 577 ms and 553 ms respectively.
-
-## Testing and Verification
-
-### Server Checks
-```bash
-cd server
-npm run typecheck   # Typecheck without emit
-npm test            # Run Vitest test suite
-npm run build       # Compile TypeScript
-```
-
-Verify backend health check endpoint:
-```bash
-curl http://localhost:5000/api/health
-# Response: {"data":{"ok":true}}
-```
-
-### Client Checks
-```bash
-cd client
-npm run typecheck   # Typecheck without emit
-npm test            # Run Vitest test suite
-npm run build       # Build production bundle
-```
+- The browser's anonymous client ID is an ownership hint, not authentication.
+- Uploaded files are temporary local files; the app is not a durable file store.
+- Free-tier quotas are small and may change. Google may use free-tier submitted data to improve products, so use synthetic/sample data only. Rate limits and overload (including HTTP 503) can interrupt a request.
+- Audio support is MP3 and WAV only. There is no OCR; PDFs need selectable text and are limited to 300 pages.
+- Text above `MAX_TEXT_CHARS` is not chunked and is rejected.
+- PDF extraction runs synchronously and can briefly block the server while a large document is processed.

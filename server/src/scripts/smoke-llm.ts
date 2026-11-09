@@ -11,6 +11,7 @@ import { GeminiLlmClient, logGeminiFailure } from '../services/gemini.llm.servic
 import { formatMinutesToMarkdown } from '../services/minutesFormatter.js';
 import { AppError } from '../utils/AppError.js';
 import { env } from '../config/env.js';
+import { GEMINI_API_KEY_REQUIRED_MESSAGE, requireGeminiApiKey } from '../config/geminiApiKey.js';
 
 dotenv.config();
 
@@ -40,13 +41,16 @@ function parseTimeoutMs(raw: string | undefined): number {
 }
 
 async function main(): Promise<void> {
-  const apiKey = process.env.GEMINI_API_KEY;
   const model = env.GEMINI_MODEL;
   const timeoutMs = parseTimeoutMs(process.env.GEMINI_TIMEOUT_MS);
+  let apiKey: string;
 
-  if (!apiKey) {
-    console.error('GEMINI_API_KEY is not set in server/.env');
-    process.exit(1);
+  try {
+    apiKey = requireGeminiApiKey(env.GEMINI_API_KEY);
+  } catch {
+    console.error(GEMINI_API_KEY_REQUIRED_MESSAGE);
+    process.exitCode = 1;
+    return;
   }
 
   const client = new GeminiLlmClient(apiKey, model, timeoutMs);

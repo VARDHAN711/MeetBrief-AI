@@ -1,0 +1,1 @@
+{ "status": "DRAFT", "decisions": ["Archive the old dashboard"], "actionItems": [{ "task": "Prepare migration checklist", "assignee": "Unassigned", "deadline": "Not specified" }], "pendingIssues": ["Whether to notify customers"] }

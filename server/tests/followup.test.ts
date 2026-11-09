@@ -7,6 +7,7 @@ import { Message } from '../src/models/Message.js';
 import * as llmService from '../src/services/llm.service.js';
 import { GeminiLlmClient } from '../src/services/gemini.llm.service.js';
 import { AppError } from '../src/utils/AppError.js';
+import { formatMinutesToMarkdown } from '../src/services/minutesFormatter.js';
 import type { FollowupTurn } from '../src/prompts/followup.js';
 import type { MessageItem } from '../src/types/api.js';
 
@@ -46,8 +47,8 @@ function useMock(answerQuestion: AnswerFn = answerFromSource): {
   };
 }
 
-async function createChat(): Promise<string> {
-  const res = await request(app).post('/api/conversations').set('x-client-id', OWNER).send({ text: SOURCE });
+async function createChat(sourceText = SOURCE, clientId = OWNER): Promise<string> {
+  const res = await request(app).post('/api/conversations').set('x-client-id', clientId).send({ text: sourceText });
   expect(res.status).toBe(201);
   return res.body.data.conversation.id as string;
 }
@@ -131,6 +132,58 @@ describe('Phase 3 - follow-up messages and retry (mocked LLM)', () => {
     expect(afterReopen.status).toBe(201);
     expect(afterReopen.body.data.messages[1].content).toBe(NOT_IN_SOURCE);
     expect(mock.answerQuestion.mock.calls.at(-1)?.[0]).toBe(SOURCE);
+  });
+
+  it('sends only the selected conversation source and history for same and different client ids', async () => {
+    const mock = useMock();
+    const sourceA = 'CONTEXT_A_ONLY_MARKER: Alpha reviewed the archive plan and chose April 4.';
+    const sourceB = 'CONTEXT_B_ONLY_MARKER: Beta approved the catalog draft and chose May 8.';
+    const sourceC = 'CONTEXT_C_ONLY_MARKER: Cedar selected a new label and chose June 2.';
+    const sourceD = 'CONTEXT_D_ONLY_MARKER: Delta approved the queue review and chose July 6.';
+    const aId = await createChat(sourceA, OWNER);
+    const bId = await createChat(sourceB, OWNER);
+    const cId = await createChat(sourceC, OTHER);
+    const dId = await createChat(sourceD, OTHER);
+    mock.answerQuestion.mockClear();
+
+    const bQuestion = 'What did Beta approve?';
+    const bResponse = await request(app)
+      .post(`/api/conversations/${bId}/messages`)
+      .set('x-client-id', OWNER)
+      .send({ content: bQuestion });
+    expect(bResponse.status).toBe(201);
+    expect(mock.answerQuestion.mock.calls[0]).toEqual([
+      sourceB,
+      [
+        { role: 'user', content: sourceB },
+        { role: 'assistant', content: formatMinutesToMarkdown(llmService.STUB_MINUTES) },
+      ],
+      bQuestion,
+    ]);
+    expect(JSON.stringify(mock.answerQuestion.mock.calls[0])).not.toContain('CONTEXT_A_ONLY_MARKER');
+    expect(JSON.stringify(mock.answerQuestion.mock.calls[0])).not.toContain('CONTEXT_C_ONLY_MARKER');
+    expect(JSON.stringify(mock.answerQuestion.mock.calls[0])).not.toContain('CONTEXT_D_ONLY_MARKER');
+
+    const dQuestion = 'What did Delta approve?';
+    const dResponse = await request(app)
+      .post(`/api/conversations/${dId}/messages`)
+      .set('x-client-id', OTHER)
+      .send({ content: dQuestion });
+    expect(dResponse.status).toBe(201);
+    expect(mock.answerQuestion.mock.calls[1]).toEqual([
+      sourceD,
+      [
+        { role: 'user', content: sourceD },
+        { role: 'assistant', content: formatMinutesToMarkdown(llmService.STUB_MINUTES) },
+      ],
+      dQuestion,
+    ]);
+    expect(JSON.stringify(mock.answerQuestion.mock.calls[1])).not.toContain('CONTEXT_A_ONLY_MARKER');
+    expect(JSON.stringify(mock.answerQuestion.mock.calls[1])).not.toContain('CONTEXT_B_ONLY_MARKER');
+    expect(JSON.stringify(mock.answerQuestion.mock.calls[1])).not.toContain('CONTEXT_C_ONLY_MARKER');
+
+    expect(aId).not.toBe(bId);
+    expect(cId).not.toBe(dId);
   });
 
   it('caps history at 10 and excludes error messages', async () => {

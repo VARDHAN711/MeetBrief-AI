@@ -1,0 +1,12 @@
+[
+  { "transcript": "short", "question": "When is the campus pilot planned?", "answerable": true },
+  { "transcript": "short", "question": "Who prepares the signup page?", "answerable": true },
+  { "transcript": "short", "question": "By when will Arun prepare the signup page?", "answerable": true },
+  { "transcript": "short", "question": "What is the pilot budget?", "answerable": false },
+  { "transcript": "short", "question": "Who will lead customer support?", "answerable": false },
+  { "transcript": "no-deadlines", "question": "What meeting will continue?", "answerable": true },
+  { "transcript": "no-deadlines", "question": "Who will draft the onboarding guide?", "answerable": true },
+  { "transcript": "no-deadlines", "question": "Was a due date set for the onboarding guide?", "answerable": true },
+  { "transcript": "no-deadlines", "question": "How many customers use the process?", "answerable": false },
+  { "transcript": "no-deadlines", "question": "Where will the next meeting take place?", "answerable": false }
+]

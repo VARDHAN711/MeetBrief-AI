@@ -185,7 +185,7 @@ This section describes the API **as built** (Phases 1–7). Where it disagrees w
 - *Before the conversation exists* (validation, extraction, transcription): nothing is saved and the error has no `conversationId`. The client keeps the attached file chip so the user can resend or remove it.
 - *After the conversation is saved* (the minutes step fails): the user message and an assistant error message (`messageType: error`) are stored, and the error carries `conversationId`. The client reloads that chat's messages and shows **Retry** on the last error message. Retry regenerates from the stored `sourceText`; audio is never transcribed again.
 - *A failed follow-up:* the user message stays, an error message is stored, and Retry regenerates the last reply. Error messages are never sent to the model as history.
-- Retry is shown only for `LLM_UNAVAILABLE`, `LLM_TIMEOUT`, `LLM_BAD_OUTPUT`, `LLM_EMPTY` and `RATE_LIMITED`, and on a restored error message only when it is the last message in the chat. It is never shown for `LLM_CONFIG_ERROR` or for errors that saved nothing.
+- **Retry button.** Right after a failure the client shows Retry only for `LLM_UNAVAILABLE`, `LLM_TIMEOUT`, `LLM_BAD_OUTPUT`, `LLM_EMPTY` and `RATE_LIMITED`, and never for `LLM_CONFIG_ERROR` or for errors that saved nothing. On a restored chat (after a reload or reopening it) the stored error message does not carry its error code, so Retry is shown on the last message whenever it is an error; if the cause was a configuration error, retrying simply returns that error again. Storing the code on the message would remove this limitation (known limitation).
 
 **Error codes** (HTTP statuses were taken from the Phase 1–7 reports; Phase 8 re-checks them against the code)
 
@@ -367,7 +367,7 @@ GEMINI_API_KEY=<your key>
 GEMINI_MODEL=gemini-3.5-flash          # required; no default in code. Fallback when busy: gemini-3.5-flash-lite
 CLIENT_ORIGIN=http://localhost:5173
 MAX_TEXT_CHARS=200000
-MAX_AUDIO_MB=50                         # WAV is large; see docs/LIMITS.md
+MAX_AUDIO_MB=50                         # code default is 25; WAV is large, see docs/LIMITS.md
 MAX_DOC_MB=10
 # optional:
 GEMINI_TIMEOUT_MS=60000                 # minutes and follow-up calls

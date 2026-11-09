@@ -1,0 +1,8 @@
+Maya: The release candidate is due June 3.
+Arun: I will prepare the backend checklist by May 28.
+Lena: I will verify the onboarding flow by May 30.
+Omar: We agreed to hold the pilot to twenty users.
+Priya: I will share the support rota on June 1.
+Maya: We will use the existing feedback form for the pilot.
+Arun: The analytics dashboard should be reviewed next month.
+Lena: No owner volunteered for the dashboard review.

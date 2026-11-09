@@ -1,0 +1,3 @@
+# Evaluation results format
+
+The runner writes one ignored JSON result per model under `eval/results/` and a pasteable Markdown report with the same base name. JSON records model, transcript/run, completion status, structured minutes, latency, automated metrics, and error codes (never raw error messages). It saves JSON after each API attempt. The Markdown table includes schema validity, counts versus the DRAFT expected file, unassigned/not specified counts, possible invented names/dates, suggestion-as-decision flags, injection word detection, latency, and blank human score columns. Follow-up rows include each independent answer and a blank human score. Treat all expected files as DRAFT until the team reviews them.
