@@ -10,6 +10,7 @@ import dotenv from 'dotenv';
 import { GeminiLlmClient, logGeminiFailure } from '../services/gemini.llm.service.js';
 import { formatMinutesToMarkdown } from '../services/minutesFormatter.js';
 import { AppError } from '../utils/AppError.js';
+import { env } from '../config/env.js';
 
 dotenv.config();
 
@@ -40,7 +41,7 @@ function parseTimeoutMs(raw: string | undefined): number {
 
 async function main(): Promise<void> {
   const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+  const model = env.GEMINI_MODEL;
   const timeoutMs = parseTimeoutMs(process.env.GEMINI_TIMEOUT_MS);
 
   if (!apiKey) {
@@ -62,7 +63,7 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   if (!(err instanceof AppError)) {
-    logGeminiFailure(err, 0, process.env.GEMINI_MODEL ?? 'gemini-2.5-flash');
+    logGeminiFailure(err, 0, env.GEMINI_MODEL);
   }
   process.exit(1);
 });

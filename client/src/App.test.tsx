@@ -61,7 +61,7 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
   it('shows a selected-file chip with name and size and removes it on request', () => {
     const file = new File(['TXT meeting notes for the next review.'], 'agenda.txt', { type: 'text/plain' });
     render(<App />);
-    fireEvent.change(screen.getByLabelText('Attach a TXT or PDF file'), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText('Attach a meeting file'), { target: { files: [file] } });
     expect(screen.getByText('agenda.txt')).toBeInTheDocument();
     expect(screen.getByText('1 KB')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove attached file' }));
@@ -83,13 +83,42 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
     vi.mocked(api.create).mockReturnValue(createPromise);
     await mountWithList();
     const file = new File(['PDF fixture'], 'agenda.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByLabelText('Attach a TXT or PDF file'), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText('Attach a meeting file'), { target: { files: [file] } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(await screen.findByText('Uploading...')).toBeInTheDocument();
     expect(await screen.findByText('Extracting PDF text...')).toBeInTheDocument();
     expect(await screen.findByText('Generating meeting minutes...')).toBeInTheDocument();
     expect(api.create).toHaveBeenCalledWith(owner, file);
     await act(async () => resolveCreate({ conversation: detail, messages: [msg('m1', 1, 'user', 'Uploaded file: agenda.pdf')] }));
+  });
+
+  it('accepts MP3 and WAV audio types and shows audio transcription stages', async () => {
+    let resolveCreate!: (value: CreateConversationResponse) => void;
+    vi.mocked(api.create).mockReturnValue(new Promise<CreateConversationResponse>(resolve => { resolveCreate = resolve; }));
+    await mountWithList();
+    const input = screen.getByLabelText('Attach a meeting file') as HTMLInputElement;
+    expect(input.accept).toContain('.mp3');
+    expect(input.accept).toContain('.wav');
+    expect(input.accept).not.toContain('.m4a');
+    const file = new File(['small wav fixture'], 'meeting.wav', { type: 'audio/wav' });
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Uploading...')).toBeInTheDocument();
+    expect(await screen.findByText('Transcribing audio...')).toBeInTheDocument();
+    expect(await screen.findByText('Generating meeting minutes...')).toBeInTheDocument();
+    expect(api.create).toHaveBeenCalledWith(owner, file);
+    await act(async () => resolveCreate({ conversation: detail, messages: [msg('audio-user', 1, 'user', 'Uploaded file: meeting.wav')] }));
+  });
+
+  it('keeps the audio file chip after transcription fails before a conversation exists', async () => {
+    const file = new File(['audio bytes'], 'meeting.mp3', { type: 'audio/mpeg' });
+    vi.mocked(api.create).mockRejectedValue(new ApiRequestError({ code: 'TRANSCRIPTION_FAILED', message: rawServerText }));
+    await mountWithList();
+    fireEvent.change(screen.getByLabelText('Attach a meeting file'), { target: { files: [file] } });
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not transcribe this recording. Try a clearer or shorter file.');
+    expect(screen.getByText('meeting.mp3')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('failed first message restores stored messages, adds the chat to the sidebar, and shows Retry', async () => {
@@ -135,7 +164,7 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
     ['LLM_BAD_OUTPUT', 'The AI response could not be read. Please try again.'],
     ['LLM_TIMEOUT', 'The AI request took too long. Please try again.'],
     ['INVALID_INPUT', 'Please check your text and try again.'],
-    ['PAYLOAD_TOO_LARGE', 'This text is too long. Please shorten it and try again.'],
+    ['PAYLOAD_TOO_LARGE', 'This text or file is too large. Please shorten it or choose a smaller file.'],
     ['INVALID_CLIENT_ID', 'This browser session is invalid. Refresh the page to start a new session.'],
     ['INVALID_ID', 'That conversation link is invalid. Choose a meeting from the sidebar.'],
     ['CONVERSATION_NOT_FOUND', 'That conversation could not be found. Refresh the meeting list.'],
@@ -153,14 +182,24 @@ describe('Phase 4 client behavior (mock API; no server calls)', () => {
   });
 
   it.each([
-    ['UNSUPPORTED_FILE_TYPE', 'Choose a TXT or PDF file. Audio and other file types are not supported yet.'],
-    ['INVALID_FILE', 'That file is empty, corrupt, or not a valid TXT or PDF file.'],
+    ['UNSUPPORTED_FILE_TYPE', 'This file format is not supported yet. Convert audio to MP3 or WAV, or choose a TXT or PDF file.'],
+    ['INVALID_FILE', 'That file is empty, corrupt, or not a valid supported file.'],
     ['NO_EXTRACTABLE_TEXT', 'This PDF seems to be scanned or image-only. This version needs a PDF with selectable text.'],
   ])('shows a friendly message without Retry for upload error %s', async (code, expected) => {
     vi.mocked(api.create).mockRejectedValue(new ApiRequestError({ code, message: rawServerText }));
     await mountWithList();
     await submit();
     expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('shows the friendly TRANSCRIPTION_FAILED message without raw server text or Retry', async () => {
+    vi.mocked(api.create).mockRejectedValue(new ApiRequestError({ code: 'TRANSCRIPTION_FAILED', message: rawServerText }));
+    await mountWithList();
+    await submit();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('We could not transcribe this recording. Try a clearer or shorter file.');
+    expect(alert).not.toHaveTextContent(rawServerText);
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 

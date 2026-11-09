@@ -51,5 +51,9 @@ export class AppError extends Error {
   static noExtractableText(message = 'This PDF seems to be scanned or image-only. This version needs a PDF with selectable text.'): AppError {
     return new AppError(422, 'NO_EXTRACTABLE_TEXT', message);
   }
+
+  static transcriptionFailed(message = 'We could not transcribe this recording. Try a clearer or shorter file.'): AppError {
+    return new AppError(502, 'TRANSCRIPTION_FAILED', message);
+  }
 }
 

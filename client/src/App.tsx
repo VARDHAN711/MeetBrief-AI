@@ -12,16 +12,17 @@ const friendly: Record<string, string> = {
   LLM_BAD_OUTPUT: 'The AI response could not be read. Please try again.',
   LLM_TIMEOUT: 'The AI request took too long. Please try again.',
   INVALID_INPUT: 'Please check your text and try again.',
-  PAYLOAD_TOO_LARGE: 'This text is too long. Please shorten it and try again.',
+  PAYLOAD_TOO_LARGE: 'This text or file is too large. Please shorten it or choose a smaller file.',
   INVALID_CLIENT_ID: 'This browser session is invalid. Refresh the page to start a new session.',
   INVALID_ID: 'That conversation link is invalid. Choose a meeting from the sidebar.',
   CONVERSATION_NOT_FOUND: 'That conversation could not be found. Refresh the meeting list.',
   RETRY_NOT_ALLOWED: 'There is no failed response to retry.',
   BAD_REQUEST: 'The request could not be understood. Please try again.',
   INTERNAL_SERVER_ERROR: 'The server encountered a problem. Please try again.',
-  UNSUPPORTED_FILE_TYPE: 'Choose a TXT or PDF file. Audio and other file types are not supported yet.',
-  INVALID_FILE: 'That file is empty, corrupt, or not a valid TXT or PDF file.',
+  UNSUPPORTED_FILE_TYPE: 'This file format is not supported yet. Convert audio to MP3 or WAV, or choose a TXT or PDF file.',
+  INVALID_FILE: 'That file is empty, corrupt, or not a valid supported file.',
   NO_EXTRACTABLE_TEXT: 'This PDF seems to be scanned or image-only. This version needs a PDF with selectable text.',
+  TRANSCRIPTION_FAILED: 'We could not transcribe this recording. Try a clearer or shorter file.',
 };
 const retryable = new Set(['RATE_LIMITED', 'LLM_UNAVAILABLE', 'LLM_EMPTY', 'LLM_BAD_OUTPUT', 'LLM_TIMEOUT']);
 const FILE_STAGE_PAUSE_MS = 120;
@@ -68,8 +69,8 @@ export function Composer({
       <button type="button" aria-label="Remove attached file" onClick={() => { onFileChange(null); if (fileInput.current) fileInput.current.value = ''; }}>×</button>
     </div>}
     <div className="composer-row">
-      <button type="button" className="attach" disabled={busy || !allowUpload} title={allowUpload ? 'Attach a TXT or PDF file' : disabledTitle} onClick={() => fileInput.current?.click()}>＋</button>
-      <input ref={fileInput} className="file-input" type="file" accept=".txt,.pdf,text/plain,application/pdf" aria-label="Attach a TXT or PDF file" onChange={event => onFileChange(event.target.files?.[0] ?? null)} />
+      <button type="button" className="attach" disabled={busy || !allowUpload} title={allowUpload ? 'Attach a meeting file' : disabledTitle} onClick={() => fileInput.current?.click()}>＋</button>
+      <input ref={fileInput} className="file-input" type="file" accept=".txt,.pdf,.mp3,.wav,text/plain,application/pdf,audio/mpeg,audio/mp3,audio/wav" aria-label="Attach a meeting file" onChange={event => onFileChange(event.target.files?.[0] ?? null)} />
       <textarea aria-label="Message" placeholder="Paste meeting notes or ask a question…" value={text} onChange={e => setText(e.target.value)} disabled={busy} rows={2} />
       <button type="submit" disabled={busy || (!text.trim() && !selectedFile)}>{busy ? 'Working…' : 'Send'}</button>
     </div>
@@ -147,6 +148,9 @@ export default function App() {
           await new Promise<void>(resolve => window.setTimeout(resolve, FILE_STAGE_PAUSE_MS));
           if (file.name.toLowerCase().endsWith('.pdf')) {
             setStage('Extracting PDF text...');
+            await new Promise<void>(resolve => window.setTimeout(resolve, FILE_STAGE_PAUSE_MS));
+          } else if (/\.(mp3|wav)$/i.test(file.name)) {
+            setStage('Transcribing audio...');
             await new Promise<void>(resolve => window.setTimeout(resolve, FILE_STAGE_PAUSE_MS));
           }
           setStage('Generating meeting minutes...');

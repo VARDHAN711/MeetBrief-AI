@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { extractText, getDocumentProxy } from 'unpdf';
+import { env } from '../config/env.js';
 import { AppError } from '../utils/AppError.js';
 import { sanitizeFilename } from '../utils/sanitizeFilename.js';
 import type { SourceType } from '../types/api.js';
@@ -27,6 +28,9 @@ export async function extractUploadedFile(file: Express.Multer.File): Promise<Ex
   }
 
   const sourceType = extension === '.txt' ? 'txt' : 'pdf';
+  if (file.size > env.MAX_DOC_MB * 1024 * 1024) {
+    throw AppError.payloadTooLarge('PAYLOAD_TOO_LARGE', 'The uploaded document exceeds the maximum file size.');
+  }
   const mimeType = file.mimetype.toLowerCase();
   if (!MIME_TYPES[sourceType].has(mimeType)) {
     throw AppError.invalidFile('The file content does not match its file type.');

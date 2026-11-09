@@ -13,10 +13,71 @@ import { cleanupStaleUploadFiles, uploadDirectory } from '../src/middleware/uplo
 import { MAX_PDF_PAGES } from '../src/services/extract.service.js';
 import { sanitizeFilename } from '../src/utils/sanitizeFilename.js';
 import { setLlmClient, StubLlmClient, STUB_MINUTES, type LlmClient } from '../src/services/llm.service.js';
+import {
+  GeminiTranscriber,
+  resetTranscriberClient,
+  setTranscriberClient,
+  type GeminiAudioGateway,
+  type RemoteAudioFile,
+  type TranscriberClient,
+  type TranscriptionResult,
+} from '../src/services/transcribe.service.js';
 
 const TEST_DB_URI = 'mongodb://127.0.0.1:27017/meetbrief_test';
 const CLIENT_ID = '66666666-6666-4666-8666-666666666666';
 const MEETING_TEXT = 'The team reviewed the release schedule and agreed that Maya will send the final proposal next Thursday.';
+const TRANSCRIPT = 'The design group reviewed the release timeline and agreed that Jordan will share the revised schedule next Friday.';
+
+function makeMp3Fixture(): Buffer {
+  const frame = Buffer.alloc(417);
+  frame.set([0xff, 0xfb, 0x90, 0x64]);
+  return frame;
+}
+
+function makeWavFixture(sampleData = Buffer.alloc(800, 128)): Buffer {
+  const wav = Buffer.alloc(44 + sampleData.length);
+  wav.write('RIFF', 0, 'ascii');
+  wav.writeUInt32LE(36 + sampleData.length, 4);
+  wav.write('WAVE', 8, 'ascii');
+  wav.write('fmt ', 12, 'ascii');
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8_000, 24);
+  wav.writeUInt32LE(8_000, 28);
+  wav.writeUInt16LE(1, 32);
+  wav.writeUInt16LE(8, 34);
+  wav.write('data', 36, 'ascii');
+  wav.writeUInt32LE(sampleData.length, 40);
+  sampleData.copy(wav, 44);
+  return wav;
+}
+
+function makeAudioGateway(
+  result: TranscriptionResult,
+  overrides: Partial<GeminiAudioGateway> = {}
+): GeminiAudioGateway {
+  const remote: RemoteAudioFile = {
+    name: 'files/test-audio',
+    uri: 'https://generativelanguage.googleapis.com/v1beta/files/test-audio',
+    mimeType: 'audio/mpeg',
+    state: 'ACTIVE',
+  };
+  return {
+    upload: vi.fn().mockResolvedValue(remote),
+    get: vi.fn().mockResolvedValue(remote),
+    generate: vi.fn().mockResolvedValue(result),
+    delete: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function setMockTranscriber(result: TranscriptionResult): ReturnType<typeof vi.fn> {
+  const transcribe = vi.fn().mockResolvedValue(result);
+  const client: TranscriberClient = { transcribe };
+  setTranscriberClient(client);
+  return transcribe;
+}
 
 function makePdf(text?: string): Buffer {
   const literal = text?.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
@@ -89,9 +150,11 @@ describe('Phase 5 - TXT and PDF uploads', () => {
     await Conversation.deleteMany({});
     await Message.deleteMany({});
     setLlmClient(new StubLlmClient());
+    resetTranscriberClient();
   });
 
   afterEach(async () => {
+    resetTranscriberClient();
     await expectNoTempFiles();
   });
 
@@ -196,13 +259,185 @@ describe('Phase 5 - TXT and PDF uploads', () => {
     expect(await Conversation.countDocuments()).toBe(0);
   });
 
-  it.each(['notes.exe', 'recording.mp3'])('rejects unsupported file %s with UNSUPPORTED_FILE_TYPE', async filename => {
-    const contentType = filename.endsWith('.mp3') ? 'audio/mpeg' : 'application/octet-stream';
+  it.each(['notes.exe', 'recording.m4a'])('rejects unsupported file %s with UNSUPPORTED_FILE_TYPE', async filename => {
+    const contentType = filename.endsWith('.m4a') ? 'audio/m4a' : 'application/octet-stream';
     const result = await upload(Buffer.from('unsupported fixture'), filename, contentType);
     expect(result.status).toBe(415);
     expect(result.body.error.code).toBe('UNSUPPORTED_FILE_TYPE');
+    if (filename.endsWith('.m4a')) expect(result.body.error.message).toContain('convert it to MP3 or WAV');
     expect(await Conversation.countDocuments()).toBe(0);
     expect(await Message.countDocuments()).toBe(0);
+  });
+
+  it.each([
+    ['meeting.mp3', 'audio/mpeg', makeMp3Fixture],
+    ['meeting.wav', 'audio/wav', makeWavFixture],
+  ])('transcribes a valid %s and stores only its transcript and attachment metadata', async (filename, mimeType, fixture) => {
+    const transcribe = setMockTranscriber({ text: TRANSCRIPT });
+    const bytes = fixture();
+    const result = await upload(bytes, filename, mimeType);
+    expect(result.status).toBe(201);
+    const id = result.body.data.conversation.id as string;
+    const conversation = await Conversation.findById(id);
+    expect(conversation?.sourceType).toBe('audio');
+    expect(conversation?.sourceText).toBe(TRANSCRIPT);
+    expect(conversation?.originalFilename).toBe(filename);
+    const userMessage = await Message.findOne({ conversationId: id, role: 'user' });
+    expect(userMessage?.content).toBe(`Uploaded file: ${filename}`);
+    expect(userMessage?.content).not.toContain(TRANSCRIPT);
+    expect(userMessage?.attachments.map(item => ({ name: item.name, mimeType: item.mimeType, sizeBytes: item.sizeBytes })))
+      .toEqual([{ name: filename, mimeType, sizeBytes: bytes.length }]);
+    expect(transcribe).toHaveBeenCalledWith(expect.any(String), filename.endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav');
+  });
+
+  it('rejects an executable renamed to MP3 based on the audio magic bytes', async () => {
+    const result = await upload(Buffer.from('MZ executable fixture', 'ascii'), 'renamed.mp3', 'audio/mpeg');
+    expect(result.status).toBe(400);
+    expect(result.body.error.code).toBe('INVALID_FILE');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(await Message.countDocuments()).toBe(0);
+  });
+
+  it('rejects an empty audio file and saves nothing', async () => {
+    const result = await upload(Buffer.alloc(0), 'empty.mp3', 'audio/mpeg');
+    expect(result.status).toBe(400);
+    expect(result.body.error.code).toBe('INVALID_FILE');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(await Message.countDocuments()).toBe(0);
+  });
+
+  it('maps an oversized audio upload to PAYLOAD_TOO_LARGE before saving anything', async () => {
+    const tooLarge = Buffer.alloc(env.MAX_AUDIO_MB * 1024 * 1024 + 1, 0);
+    const result = await upload(tooLarge, 'large.wav', 'audio/wav');
+    expect(result.status).toBe(413);
+    expect(result.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(await Message.countDocuments()).toBe(0);
+  });
+
+  it.each([
+    ['empty transcript', { text: '' }],
+    ['short transcript', { text: 'A few words only.' }],
+    ['refusal', { text: "I'm sorry, I cannot transcribe this audio." }],
+    ['truncated transcript', { text: TRANSCRIPT, finishReason: 'MAX_TOKENS' }],
+  ])('rejects an %s before creating a conversation and deletes its remote file', async (_label, transcription) => {
+    const gateway = makeAudioGateway(transcription);
+    setTranscriberClient(new GeminiTranscriber('gemini-2.5-flash', 1000, gateway));
+    const result = await upload(makeMp3Fixture(), 'meeting.mp3', 'audio/mpeg');
+    expect(result.status).toBe(502);
+    expect(result.body.error.code).toBe('TRANSCRIPTION_FAILED');
+    expect(result.body.error).not.toHaveProperty('conversationId');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(await Message.countDocuments()).toBe(0);
+    expect(gateway.delete).toHaveBeenCalledWith('files/test-audio');
+    expect(gateway.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a transcription timeout to 504 LLM_TIMEOUT and deletes the remote file', async () => {
+    const gateway = makeAudioGateway({ text: TRANSCRIPT }, {
+      generate: vi.fn((_model: string, _file: RemoteAudioFile, signal: AbortSignal): Promise<TranscriptionResult> => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      })),
+    });
+    setTranscriberClient(new GeminiTranscriber('gemini-2.5-flash', 20, gateway));
+    const result = await upload(makeMp3Fixture(), 'timeout.mp3', 'audio/mpeg');
+    expect(result.status).toBe(504);
+    expect(result.body.error.code).toBe('LLM_TIMEOUT');
+    expect(result.body.error).not.toHaveProperty('conversationId');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(gateway.delete).toHaveBeenCalledWith('files/test-audio');
+  });
+
+  it('retries one transcription 429 then returns RATE_LIMITED without saving and deletes the remote file', async () => {
+    const rateLimit = Object.assign(new Error('quota exhausted'), { status: 429 });
+    const gateway = makeAudioGateway({ text: TRANSCRIPT }, {
+      generate: vi.fn().mockRejectedValue(rateLimit),
+    });
+    setTranscriberClient(new GeminiTranscriber('gemini-2.5-flash', 1000, gateway));
+    const result = await upload(makeMp3Fixture(), 'limited.mp3', 'audio/mpeg');
+    expect(result.status).toBe(429);
+    expect(result.body.error.code).toBe('RATE_LIMITED');
+    expect(result.body.error).not.toHaveProperty('conversationId');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(gateway.generate).toHaveBeenCalledTimes(2);
+    expect(gateway.delete).toHaveBeenCalledWith('files/test-audio');
+  });
+
+  it('deletes remote files on success and generation failure, and ignores remote-delete failures', async () => {
+    const successfulGateway = makeAudioGateway({ text: TRANSCRIPT }, {
+      delete: vi.fn().mockRejectedValue(new Error('remote cleanup unavailable')),
+    });
+    await expect(new GeminiTranscriber('gemini-2.5-flash', 1000, successfulGateway).transcribe('fixture.mp3', 'audio/mpeg'))
+      .resolves.toMatchObject({ text: TRANSCRIPT });
+    expect(successfulGateway.delete).toHaveBeenCalledTimes(1);
+
+    const unavailable = Object.assign(new Error('upstream unavailable'), { status: 503 });
+    const failedGateway = makeAudioGateway({ text: TRANSCRIPT }, {
+      generate: vi.fn().mockRejectedValue(unavailable),
+    });
+    await expect(new GeminiTranscriber('gemini-2.5-flash', 1000, failedGateway).transcribe('fixture.mp3', 'audio/mpeg'))
+      .rejects.toMatchObject({ code: 'LLM_UNAVAILABLE' });
+    expect(failedGateway.generate).toHaveBeenCalledTimes(2);
+    expect(failedGateway.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a transcript above MAX_TEXT_CHARS with 413 and saves nothing', async () => {
+    const gateway = makeAudioGateway({ text: 'A'.repeat(env.MAX_TEXT_CHARS + 1) });
+    setTranscriberClient(new GeminiTranscriber('gemini-2.5-flash', 1000, gateway));
+    const result = await upload(makeMp3Fixture(), 'long-transcript.mp3', 'audio/mpeg');
+    expect(result.status).toBe(413);
+    expect(result.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+    expect(result.body.error).not.toHaveProperty('conversationId');
+    expect(await Conversation.countDocuments()).toBe(0);
+    expect(await Message.countDocuments()).toBe(0);
+    expect(gateway.delete).toHaveBeenCalledWith('files/test-audio');
+  });
+
+  it('keeps a good transcript after minutes failure and retries without transcribing again', async () => {
+    const transcribe = setMockTranscriber({ text: TRANSCRIPT });
+    const generateMinutes = vi.fn()
+      .mockRejectedValueOnce(new AppError(502, 'LLM_UNAVAILABLE', 'AI temporarily unavailable'))
+      .mockResolvedValueOnce(STUB_MINUTES);
+    const llm: LlmClient = { generateMinutes, answerQuestion: vi.fn().mockResolvedValue('Answer') };
+    setLlmClient(llm);
+    const failed = await upload(makeWavFixture(), 'retry.wav', 'audio/wav');
+    expect(failed.status).toBe(502);
+    expect(failed.body.error.code).toBe('LLM_UNAVAILABLE');
+    expect(typeof failed.body.error.conversationId).toBe('string');
+    const id = failed.body.error.conversationId as string;
+    expect((await Conversation.findById(id))?.sourceText).toBe(TRANSCRIPT);
+    const retried = await request(app).post(`/api/conversations/${id}/retry`).set('x-client-id', CLIENT_ID);
+    expect(retried.status).toBe(200);
+    expect(retried.body.data.message.messageType).toBe('minutes');
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(generateMinutes).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not log an audio filename, transcript, or audio content during successful upload', async () => {
+    const filename = 'private-audio-name.wav';
+    const transcript = 'Private transcript marker followed by enough spoken words to create meeting notes.';
+    const audioMarker = 'PRIVATE_AUDIO_BYTES_MARKER';
+    const audioBytes = makeWavFixture(Buffer.from(audioMarker, 'ascii'));
+    const transcribe = setMockTranscriber({ text: transcript });
+    const logMethods = ['error', 'info', 'log', 'warn', 'debug'] as const;
+    const logSpies = logMethods.map(method => vi.spyOn(console, method).mockImplementation(() => undefined));
+    try {
+      const result = await upload(audioBytes, filename, 'audio/wav');
+      expect(result.status).toBe(201);
+      expect(transcribe).toHaveBeenCalledTimes(1);
+      for (const spy of logSpies) {
+        const logged = spy.mock.calls.flat().map(value => String(value)).join('\n');
+        expect(logged).not.toContain(filename);
+        expect(logged).not.toContain(transcript);
+        expect(logged).not.toContain(audioMarker);
+      }
+    } finally {
+      logSpies.forEach(spy => spy.mockRestore());
+    }
   });
 
   it('sanitizes path parts and unusual filename characters for display', async () => {

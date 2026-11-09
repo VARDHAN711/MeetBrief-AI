@@ -43,7 +43,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: env.MAX_DOC_MB * 1024 * 1024,
+    fileSize: Math.max(env.MAX_DOC_MB, env.MAX_AUDIO_MB) * 1024 * 1024,
     files: 1,
   },
 });

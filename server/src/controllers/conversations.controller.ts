@@ -8,6 +8,7 @@ import { getLlmClient } from '../services/llm.service.js';
 import { formatMinutesToMarkdown } from '../services/minutesFormatter.js';
 import { AppError } from '../utils/AppError.js';
 import { extractUploadedFile } from '../services/extract.service.js';
+import { transcribeUploadedAudio } from '../services/transcribe.service.js';
 import type {
   ConversationSummary,
   ConversationDetail,
@@ -87,7 +88,7 @@ export async function createConversation(
 
   try {
     let rawText: string;
-    let sourceType: 'text' | 'txt' | 'pdf' = 'text';
+    let sourceType: 'text' | 'txt' | 'pdf' | 'audio' = 'text';
     let originalFilename: string | undefined;
     let uploadMetadata: { name: string; mimeType: string; sizeBytes: number } | undefined;
     let userMessageContent: string;
@@ -96,7 +97,12 @@ export async function createConversation(
       if (Object.keys(req.body as Record<string, unknown>).length > 0) {
         throw AppError.badRequest('INVALID_INPUT', 'A file upload must contain only the "file" field.');
       }
-      const extracted = await extractUploadedFile(uploadedFile);
+      const fileExtension = uploadedFile.originalname.slice(uploadedFile.originalname.lastIndexOf('.')).toLowerCase();
+      const isAudioUpload = fileExtension === '.mp3' || fileExtension === '.wav' || fileExtension === '.m4a' ||
+        uploadedFile.mimetype.toLowerCase().startsWith('audio/');
+      const extracted = isAudioUpload
+        ? await transcribeUploadedAudio(uploadedFile)
+        : await extractUploadedFile(uploadedFile);
       rawText = extracted.text;
       sourceType = extracted.sourceType;
       originalFilename = extracted.originalFilename;
@@ -104,7 +110,7 @@ export async function createConversation(
       userMessageContent = `Uploaded file: ${extracted.originalFilename}`;
     } else {
       if (req.is('multipart/form-data')) {
-        throw AppError.badRequest('INVALID_INPUT', 'Attach one TXT or PDF file using the "file" field.');
+        throw AppError.badRequest('INVALID_INPUT', 'Attach one TXT, PDF, MP3, or WAV file using the "file" field.');
       }
       const body = req.body as { text?: unknown };
       if (typeof body?.text !== 'string') {
